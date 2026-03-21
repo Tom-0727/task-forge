@@ -1,0 +1,85 @@
+# Memory/knowledge/
+
+Distilled long-term knowledge for {{AGENT_NAME}}.
+
+**You MUST read this file before creating or updating any knowledge note.**
+
+## Structure
+
+```
+knowledge/
+  factual/        # Terms, entities, definitions, data points
+  conceptual/     # Models, frameworks, principles, taxonomies
+  heuristic/      # Decision rules and problem-solving shortcuts
+  metacognitive/  # Self-observations, capability boundaries, uncertainty patterns
+```
+
+One file = one reusable knowledge unit. Use filename and tags for coarse-grained domain grouping. Avoid deep directory nesting.
+
+## File Naming
+
+Format: `<kind>--<domain>--<slug>.md`
+
+- `kind`: `factual | conceptual | heuristic | metacognitive`
+- `domain`: coarse-grained namespace, kebab-case
+- `slug`: short canonical summary
+
+Place the file in the subdirectory matching its `kind`.
+
+Examples:
+- `conceptual/conceptual--market-research--porters-five-forces.md`
+- `heuristic/heuristic--market-research--triangulate-market-size.md`
+- `factual/factual--china-ev--nev-sales-2025-summary.md`
+- `metacognitive/metacognitive--research--when-single-source-data-needs-verification.md`
+
+## Frontmatter (required)
+
+Every knowledge note must begin with this frontmatter:
+
+```yaml
+---
+id: kn.<domain>.<kind>.<slug>
+kind: factual | conceptual | heuristic | metacognitive
+summary: Single-line retrieval anchor.
+last_edited_at: YYYY-MM-DD
+status: active | archived | superseded
+tags: [tag1, tag2]
+---
+```
+
+- `id`: stable note identifier (not the file path)
+- `kind`: must match subdirectory
+- `summary`: one line, used for retrieval
+- `last_edited_at`: date of last substantive change
+- `status`: `active` (default), `archived`, or `superseded`
+- `tags`: flat retrieval tags, not a strict ontology
+
+## Body Template
+
+```markdown
+## Core Content
+
+- Assertion / model / heuristic / self-observation
+- Boundary conditions
+- Important distinctions
+
+## Limitations
+
+- Failure conditions
+- Unresolved uncertainties
+
+## Optional Notes
+
+- Examples
+- Source references
+- Pointers to episodes or sources when needed
+```
+
+## Retrieval
+
+Use terminal commands only:
+
+- File name search: `find` / `rg --files`
+- Content search: `rg`
+- Metadata filtering: `rg` on frontmatter fields (`kind`, `status`, `tags`)
+- Domain filtering: filename patterns and/or tags

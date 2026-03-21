@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# create-agent — Scaffold a new Agent workspace
+#
+# Usage:
+#   ./create-agent <target-directory> <agent-name>
+#
+# Example:
+#   ./create-agent /tmp/my-agent ResearchBot
+
+set -euo pipefail
+
+# ─── Argument validation ────────────────────────────────────────────
+
+if [[ $# -lt 2 ]]; then
+  echo "Usage: $0 <target-directory> <agent-name>"
+  echo ""
+  echo "Arguments:"
+  echo "  target-directory  Path where the agent workspace will be created"
+  echo "  agent-name        Name for the agent (e.g., ResearchBot)"
+  echo ""
+  echo "Example:"
+  echo "  $0 /tmp/my-agent ResearchBot"
+  exit 1
+fi
+
+TARGET_DIR="$1"
+AGENT_NAME="$2"
+
+# Resolve script directory for template access
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TEMPLATE_DIR="${SCRIPT_DIR}/templates"
+
+# ─── Validate inputs ────────────────────────────────────────────────
+
+if [[ -e "$TARGET_DIR" ]]; then
+  echo "Error: Target directory already exists: ${TARGET_DIR}"
+  echo "Remove it first or choose a different path."
+  exit 1
+fi
+
+if [[ ! -d "$TEMPLATE_DIR" ]]; then
+  echo "Error: Templates directory not found: ${TEMPLATE_DIR}"
+  exit 1
+fi
+
+# ─── Template variables ─────────────────────────────────────────────
+
+CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+CREATED_DATE="$(date -u +%Y%m%dT%H%M%SZ)"
+
+# ─── Create directory tree ──────────────────────────────────────────
+
+echo "Creating agent workspace: ${TARGET_DIR}"
+echo "Agent name: ${AGENT_NAME}"
+echo ""
+
+mkdir -p "${TARGET_DIR}"
+mkdir -p "${TARGET_DIR}/Memory/knowledge/factual"
+mkdir -p "${TARGET_DIR}/Memory/knowledge/conceptual"
+mkdir -p "${TARGET_DIR}/Memory/knowledge/heuristic"
+mkdir -p "${TARGET_DIR}/Memory/knowledge/metacognitive"
+mkdir -p "${TARGET_DIR}/Memory/episodes"
+mkdir -p "${TARGET_DIR}/tool-notes"
+mkdir -p "${TARGET_DIR}/mailbox"
+mkdir -p "${TARGET_DIR}/skills"
+mkdir -p "${TARGET_DIR}/Runtime"
+
+# ─── Template substitution helper ───────────────────────────────────
+
+render_template() {
+  local src="$1"
+  local dst="$2"
+
+  sed \
+    -e "s|{{AGENT_NAME}}|${AGENT_NAME}|g" \
+    -e "s|{{CREATED_AT}}|${CREATED_AT}|g" \
+    -e "s|{{CREATED_DATE}}|${CREATED_DATE}|g" \
+    "$src" > "$dst"
+}
+
+# ─── Render templates ───────────────────────────────────────────────
+
+render_template "${TEMPLATE_DIR}/AGENTS.md.tmpl"            "${TARGET_DIR}/AGENTS.md"
+render_template "${TEMPLATE_DIR}/run.sh.tmpl"                "${TARGET_DIR}/run.sh"
+render_template "${TEMPLATE_DIR}/knowledge-README.md.tmpl"   "${TARGET_DIR}/Memory/knowledge/README.md"
+render_template "${TEMPLATE_DIR}/episodes-README.md.tmpl"    "${TARGET_DIR}/Memory/episodes/README.md"
+render_template "${TEMPLATE_DIR}/tool-notes-README.md.tmpl"  "${TARGET_DIR}/tool-notes/README.md"
+render_template "${TEMPLATE_DIR}/mailbox-README.md.tmpl"     "${TARGET_DIR}/mailbox/README.md"
+render_template "${TEMPLATE_DIR}/MAILBOX.jsonl.tmpl"         "${TARGET_DIR}/mailbox/MAILBOX.jsonl"
+
+chmod +x "${TARGET_DIR}/run.sh"
+
+# ─── Summary ────────────────────────────────────────────────────────
+
+FILE_COUNT=$(find "${TARGET_DIR}" -type f | wc -l | tr -d ' ')
+
+echo "Done! Created ${FILE_COUNT} files:"
+echo ""
+find "${TARGET_DIR}" -type f | sort | while read -r f; do
+  echo "  ${f}"
+done
+echo ""
+echo "To start the agent:"
+echo ""
+echo "  cd ${TARGET_DIR}"
+echo "  ./run.sh --runtime claude    # or --runtime codex"
+echo ""

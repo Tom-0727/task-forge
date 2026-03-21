@@ -1,0 +1,38 @@
+# mailbox/
+
+Human-agent communication channel for {{AGENT_NAME}}.
+
+**You MUST read this file before writing to MAILBOX.jsonl.**
+
+## Purpose
+
+`MAILBOX.jsonl` is the sole communication interface between human and agent.
+
+Uses:
+- Agent progress updates
+- Agent requests for human help
+- Human replies, decisions, and instructions
+
+## Format
+
+`MAILBOX.jsonl` — each line is a JSON object.
+
+Required fields:
+- `id`: unique message identifier (format: `mail.<YYYYMMDDTHHMMSSZ>.<seq>`)
+- `ts`: ISO 8601 timestamp
+- `role`: `agent | human`
+- `task_id`: associated task identifier
+- `message`: the content
+
+Example:
+
+```json
+{"id":"mail.20260321T101500Z.001","ts":"2026-03-21T10:15:00Z","role":"agent","task_id":"task.market-research.scope","message":"Need decision: optimize for CN only or APAC?"}
+```
+
+## Operating Rules
+
+- **Append-only** — never modify or delete old messages
+- You **must** read new mailbox entries at every heartbeat wakeup
+- If you are waiting for human input (`awaiting_human = true`) and no new human message exists, do not continue the blocked task
+- When you need human input, write a message with `role: agent` and clearly state what decision or information you need

@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# run.sh — Heartbeat launcher for {{AGENT_NAME}}
+# Created: {{CREATED_AT}}
+#
+# Usage:
+#   ./run.sh --runtime codex|claude [--interval N]
+#
+# Options:
+#   --runtime   Required. Either "codex" or "claude".
+#   --interval  Heartbeat interval in minutes (default: 20).
+
+set -euo pipefail
+
+AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RUNTIME_DIR="${AGENT_DIR}/Runtime"
+MAILBOX="${AGENT_DIR}/mailbox/MAILBOX.jsonl"
+PID_FILE="${RUNTIME_DIR}/pid"
+HEARTBEAT_FILE="${RUNTIME_DIR}/last_heartbeat"
+STATE_FILE="${RUNTIME_DIR}/state"
+
+RUNTIME=""
+INTERVAL=20
+INITIALIZED=false
+
+# ─── Argument parsing ───────────────────────────────────────────────
+
+usage() {
+  echo "Usage: $0 --runtime codex|claude [--interval N]"
+  echo ""
+  echo "Options:"
+  echo "  --runtime   Required. Runtime to use: codex or claude"
+  echo "  --interval  Heartbeat interval in minutes (default: 20)"
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --runtime)
+      RUNTIME="$2"
+      shift 2
+      ;;
+    --interval)
+      INTERVAL="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      echo "Error: Unknown option: $1"
+      usage
+      ;;
+  esac
+done
+
+if [[ -z "$RUNTIME" ]]; then
+  echo "Error: --runtime is required"
+  usage
+fi
+
+if [[ "$RUNTIME" != "codex" && "$RUNTIME" != "claude" ]]; then
+  echo "Error: --runtime must be 'codex' or 'claude', got '${RUNTIME}'"
+  exit 1
+fi
+
+# ─── Runtime directory setup ────────────────────────────────────────
+
+mkdir -p "$RUNTIME_DIR"
+
+# ─── Graceful shutdown ──────────────────────────────────────────────
+
+cleanup() {
+  echo ""
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Shutting down {{AGENT_NAME}}..."
+  rm -f "$PID_FILE"
+  echo "stopped" > "$STATE_FILE"
+  exit 0
+}
+
+trap cleanup SIGINT SIGTERM
+
+# ─── PID check ──────────────────────────────────────────────────────
+
+if [[ -f "$PID_FILE" ]]; then
+  OLD_PID=$(cat "$PID_FILE")
+  if kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "Error: {{AGENT_NAME}} is already running (PID ${OLD_PID})"
+    exit 1
+  else
+    echo "Warning: Stale PID file found (PID ${OLD_PID} not running). Cleaning up."
+    rm -f "$PID_FILE"
+  fi
+fi
+
+echo $$ > "$PID_FILE"
+
+# ─── Helper functions ───────────────────────────────────────────────
+
+record_heartbeat() {
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$HEARTBEAT_FILE"
+  echo "running" > "$STATE_FILE"
+}
+
+has_new_human_messages() {
+  if [[ ! -f "$MAILBOX" ]]; then
+    return 1
+  fi
+  # Check if there are human messages after the last agent message
+  local last_agent_line last_human_line
+  last_agent_line=$(grep -n '"role"[[:space:]]*:[[:space:]]*"agent"' "$MAILBOX" | tail -1 | cut -d: -f1)
+  last_human_line=$(grep -n '"role"[[:space:]]*:[[:space:]]*"human"' "$MAILBOX" | tail -1 | cut -d: -f1)
+
+  if [[ -z "$last_human_line" ]]; then
+    return 1
+  fi
+  if [[ -z "$last_agent_line" ]]; then
+    return 0
+  fi
+  [[ "$last_human_line" -gt "$last_agent_line" ]]
+}
+
+check_awaiting_human() {
+  if [[ -f "${RUNTIME_DIR}/awaiting_human" ]]; then
+    if ! has_new_human_messages; then
+      echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Awaiting human response. Skipping heartbeat."
+      return 0
+    else
+      rm -f "${RUNTIME_DIR}/awaiting_human"
+    fi
+  fi
+  return 1
+}
+
+build_prompt() {
+  local prompt=""
+
+  if [[ "$INITIALIZED" == false ]]; then
+    prompt="You are {{AGENT_NAME}}. This is your first heartbeat.
+
+Read AGENTS.md to understand your behavioral rules.
+Read MAILBOX.jsonl for any initial instructions.
+Then begin working on your assigned task.
+
+Working directory: ${AGENT_DIR}"
+    INITIALIZED=true
+  else
+    prompt="Heartbeat wakeup for {{AGENT_NAME}}.
+
+1. Read MAILBOX.jsonl for new messages.
+2. If awaiting human input and no new human message, write 'awaiting' to Runtime/awaiting_human and stop.
+3. Otherwise, continue your current work.
+
+Working directory: ${AGENT_DIR}"
+  fi
+
+  echo "$prompt"
+}
+
+invoke_runtime() {
+  local prompt="$1"
+
+  case "$RUNTIME" in
+    codex)
+      cd "$AGENT_DIR" && codex --approval-mode full-auto -q "$prompt"
+      ;;
+    claude)
+      cd "$AGENT_DIR" && claude -p "$prompt" --allowedTools "Bash(command)" "Read(file_path)" "Write(file_path,content)" "Edit(file_path,old_string,new_string)" "Glob(pattern)" "Grep(pattern)"
+      ;;
+  esac
+}
+
+# ─── Main loop ──────────────────────────────────────────────────────
+
+echo "╔══════════════════════════════════════════════════════════╗"
+echo "║  {{AGENT_NAME}} — Starting                              "
+echo "║  Runtime:   ${RUNTIME}                                  "
+echo "║  Interval:  ${INTERVAL} minutes                         "
+echo "║  PID:       $$                                          "
+echo "║  Directory: ${AGENT_DIR}                                "
+echo "╚══════════════════════════════════════════════════════════╝"
+echo ""
+
+while true; do
+  record_heartbeat
+
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Heartbeat #$(cat "$HEARTBEAT_FILE") — starting"
+
+  # Check if we're waiting for human and no new messages
+  if check_awaiting_human; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Sleeping ${INTERVAL} minutes..."
+    sleep $((INTERVAL * 60))
+    continue
+  fi
+
+  # Build and send prompt
+  PROMPT=$(build_prompt)
+
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Invoking ${RUNTIME}..."
+  invoke_runtime "$PROMPT" || {
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Runtime exited with error (code $?). Continuing..."
+  }
+
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Heartbeat complete. Sleeping ${INTERVAL} minutes..."
+  sleep $((INTERVAL * 60))
+done
