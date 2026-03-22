@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Append an agent-authored message to mailbox/MAILBOX.jsonl."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+AGENT_DIR = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(AGENT_DIR))
+
+from mailbox_io import append_message
+
+
+def read_message(message_arg: str | None) -> str:
+    if message_arg:
+        return message_arg
+
+    if not sys.stdin.isatty():
+        return sys.stdin.read()
+
+    raise SystemExit("provide --message or pipe the message via stdin")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Append a mailbox entry for the agent")
+    parser.add_argument("--task-id", required=True, help="Associated task identifier")
+    parser.add_argument("--message", help="Mailbox message text; if omitted, stdin is used")
+    args = parser.parse_args()
+
+    mailbox_path = AGENT_DIR / "mailbox" / "MAILBOX.jsonl"
+    entry = append_message(
+        mailbox_path,
+        role="agent",
+        task_id=args.task_id,
+        message=read_message(args.message),
+    )
+    print(json.dumps({"id": entry["id"], "ts": entry["ts"]}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

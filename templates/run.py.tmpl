@@ -4,7 +4,7 @@
 Created: {{CREATED_AT}}
 
 Usage:
-    python run.py [--interval N] [--max-turns N] [--max-budget USD]
+    uv run python run.py [--interval N] [--max-turns N] [--max-budget USD]
 
 Options:
     --interval     Heartbeat interval in minutes (default: 20)
@@ -33,6 +33,7 @@ HEARTBEAT_FILE = RUNTIME_DIR / "last_heartbeat"
 STATE_FILE = RUNTIME_DIR / "state"
 SESSION_FILE = RUNTIME_DIR / "session_id"
 AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
+PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
 
 # ─── Globals ──────────────────────────────────────────────────────────
 
@@ -114,7 +115,7 @@ def has_new_human_messages() -> bool:
 def check_awaiting_human() -> bool:
     """Return True if we should skip this heartbeat (waiting for human)."""
     if AWAITING_FILE.exists():
-        if not has_new_human_messages():
+        if not load_pending_human() and not has_new_human_messages():
             log("Awaiting human response. Skipping heartbeat.")
             return True
         else:
@@ -135,14 +136,66 @@ def save_session_id(session_id: str):
     SESSION_FILE.write_text(session_id)
 
 
+# ─── Pending human wakeups ───────────────────────────────────────────
+
+def load_pending_human() -> dict | None:
+    if not PENDING_HUMAN_FILE.exists():
+        return None
+
+    try:
+        data = json.loads(PENDING_HUMAN_FILE.read_text())
+    except Exception:
+        return None
+
+    return data if isinstance(data, dict) else None
+
+
+def clear_pending_human_if_unchanged(expected_mailbox_id: str | None):
+    if not expected_mailbox_id or not PENDING_HUMAN_FILE.exists():
+        return
+
+    data = load_pending_human()
+    if data and data.get("mailbox_id") == expected_mailbox_id:
+        PENDING_HUMAN_FILE.unlink(missing_ok=True)
+
+
+async def sleep_with_wakeup(minutes: int):
+    total_seconds = max(0, minutes * 60)
+    slept = 0
+
+    while slept < total_seconds and not shutdown_requested:
+        if load_pending_human():
+            log("Pending human mailbox message detected. Waking immediately.")
+            return
+        if AWAITING_FILE.exists() and has_new_human_messages():
+            log("New human mailbox message detected while awaiting input. Waking immediately.")
+            return
+
+        await asyncio.sleep(1)
+        slept += 1
+
+
 # ─── Prompt building ─────────────────────────────────────────────────
 
-def build_prompt(first_heartbeat: bool) -> str:
+def build_prompt(first_heartbeat: bool, pending_human: dict | None) -> str:
+    if pending_human:
+        pending_id = pending_human.get("mailbox_id", "unknown")
+        return (
+            "New human mailbox messages have arrived.\n\n"
+            "1. Read mailbox/MAILBOX.jsonl immediately.\n"
+            "2. Find and address the newest human message(s).\n"
+            "3. Continue the same task in the current session.\n"
+            "4. If you need to reply, use the mailbox-send skill.\n\n"
+            f"Latest pending mailbox id: {pending_id}\n"
+            f"Working directory: {AGENT_DIR}"
+        )
+
     if first_heartbeat:
         return (
             "You are {{AGENT_NAME}}. This is your first heartbeat.\n\n"
             "Read AGENTS.md to understand your behavioral rules.\n"
             "Read mailbox/MAILBOX.jsonl for any initial instructions.\n"
+            "Use the mailbox-send skill for any agent-authored mailbox message.\n"
             "Then begin working on your assigned task.\n\n"
             f"Working directory: {AGENT_DIR}"
         )
@@ -152,7 +205,8 @@ def build_prompt(first_heartbeat: bool) -> str:
             "1. Read mailbox/MAILBOX.jsonl for new messages.\n"
             "2. If awaiting human input and no new human message, "
             "write 'awaiting' to Runtime/awaiting_human and stop.\n"
-            "3. Otherwise, continue your current work.\n\n"
+            "3. Use the mailbox-send skill for any agent-authored mailbox message.\n"
+            "4. Otherwise, continue your current work.\n\n"
             f"Working directory: {AGENT_DIR}"
         )
 
@@ -243,21 +297,29 @@ async def main():
             # Check if waiting for human
             if check_awaiting_human():
                 log(f"Sleeping {args.interval} minutes...")
-                await asyncio.sleep(args.interval * 60)
+                await sleep_with_wakeup(args.interval)
                 continue
 
             # Build prompt and invoke
-            prompt = build_prompt(first_heartbeat)
+            pending_human = load_pending_human()
+            pending_before = pending_human.get("mailbox_id") if pending_human else None
+            prompt = build_prompt(first_heartbeat, pending_human)
 
             try:
                 await invoke_agent(prompt, args.max_turns, args.max_budget)
             except Exception as e:
                 log(f"Runtime error: {e}")
+            finally:
+                clear_pending_human_if_unchanged(pending_before)
 
             first_heartbeat = False
 
+            if load_pending_human():
+                log("More human mailbox messages are pending. Continuing immediately.")
+                continue
+
             log(f"Heartbeat complete. Sleeping {args.interval} minutes...")
-            await asyncio.sleep(args.interval * 60)
+            await sleep_with_wakeup(args.interval)
     finally:
         cleanup_pid()
         log("{{AGENT_NAME}} stopped.")

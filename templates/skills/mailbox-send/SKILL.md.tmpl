@@ -1,0 +1,32 @@
+---
+name: mailbox-send
+description: Append an agent-authored message to mailbox/MAILBOX.jsonl. Use this whenever you need to send a progress update, ask the human for a decision, or report a blocker.
+---
+
+# mailbox-send
+
+Use this skill for any agent-authored mailbox entry. Prefer it over manually editing `mailbox/MAILBOX.jsonl`.
+
+## Before first use
+
+Read `mailbox/README.md`.
+
+## Command
+
+Single-line message:
+
+```bash
+uv run python skills/mailbox-send/scripts/send_mailbox.py --task-id <task_id> --message "Need decision on next step."
+```
+
+Multi-line message from stdin:
+
+```bash
+cat /tmp/message.txt | uv run python skills/mailbox-send/scripts/send_mailbox.py --task-id <task_id>
+```
+
+## Rules
+
+- One mailbox entry per distinct update or request.
+- Keep messages concise and decision-oriented.
+- The script only appends new JSONL entries; it never rewrites old lines.

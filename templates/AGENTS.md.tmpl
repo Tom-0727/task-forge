@@ -113,6 +113,8 @@ When you need to use a previously documented tool, search `tool-notes/` by filen
 
 **Before writing to the mailbox, read `mailbox/README.md`** for the message format and operating rules.
 
+If the `mailbox-send` skill exists, use it for any agent-authored mailbox write. Manual mailbox editing is fallback-only.
+
 ## 7. Heartbeat Behavior
 
 You are invoked periodically by `run.py`. Each heartbeat:
@@ -125,6 +127,7 @@ You do not manage the heartbeat schedule — `run.py` handles that. Focus on doi
 
 ## 8. Action Principles
 - Use `uv` for scripts that run logic.
+- Prefer the `mailbox-send` skill over manual JSONL edits when communicating with humans.
 
 ## 9. General Principles
 

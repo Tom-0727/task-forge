@@ -15,8 +15,9 @@ Example:
 ```bash
 ./create-agent ~/agents/researcher ResearchBot
 cd ~/agents/researcher
-pip install -r requirements.txt
-python run.py
+uv venv
+uv pip install -r requirements.txt
+uv run python run.py
 ```
 
 ## What Gets Created
@@ -40,10 +41,24 @@ python run.py
   Runtime/           # Scheduler state (session ID, PID, heartbeat)
 ```
 
+Generated workspaces now also include:
+
+- `mailbox_io.py` — shared append-only mailbox helper
+- `mailbox_feishu_bridge.py` — optional Feishu <-> mailbox bridge
+- `skills/mailbox-send/` — skill for agent-authored mailbox messages
+- `mailbox_bridge.env.example` — bridge environment template
+
+To enable the bridge in a generated workspace:
+
+```bash
+cp mailbox_bridge.env.example mailbox_bridge.env
+uv run python mailbox_feishu_bridge.py
+```
+
 ## run.py Options
 
 ```
-python run.py [--interval N] [--max-turns N] [--max-budget USD]
+uv run python run.py [--interval N] [--max-turns N] [--max-budget USD]
 ```
 
 - `--interval` (optional): Heartbeat interval in minutes (default: 20)
@@ -63,3 +78,4 @@ python run.py [--interval N] [--max-turns N] [--max-budget USD]
 - **Heartbeat in run.py, not in the agent** — agent does work, launcher handles scheduling
 - **Session resumption across heartbeats** — context carries over via `resume=session_id`
 - **Append-only mailbox** — simple, auditable human-agent communication
+- **Mailbox bridge + skill** — Feishu replies append into the mailbox, and the runner resumes the same session without duplicating human text into prompts

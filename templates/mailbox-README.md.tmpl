@@ -13,6 +13,8 @@ Uses:
 - Agent requests for human help
 - Human replies, decisions, and instructions
 
+If `mailbox_feishu_bridge.py` is running, agent-authored mailbox entries are forwarded to Feishu and inbound Feishu replies are appended back into this file as `role: human`.
+
 ## Format
 
 `MAILBOX.jsonl` — each line is a JSON object.
@@ -36,3 +38,4 @@ Example:
 - You **must** read new mailbox entries at every heartbeat wakeup
 - If you are waiting for human input (`awaiting_human = true`) and no new human message exists, do not continue the blocked task
 - When you need human input, write a message with `role: agent` and clearly state what decision or information you need
+- If `skills/mailbox-send/` exists, use it for agent-authored mailbox writes instead of manually editing `MAILBOX.jsonl`
