@@ -33,11 +33,13 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
 - `Memory/episodes/`
   有界限的执行记录。
 - `skills/`
-  可复用的 skill 机制（由 claude runtime 自动加载）。
+  可复用的 skill 机制（由 Codex / Claude runtime 自动加载）。
 - `mailbox/`
   人类-智能体共享邮箱。`MAILBOX.jsonl` 存放于此。
 - `run.py`
-  心跳启动器（Python，基于 `claude-agent-sdk`）。
+  Claude 心跳启动器（Python，基于 `claude-agent-sdk`）。
+- `run_codex.mjs`
+  Codex 心跳启动器（Node.js，基于官方 Codex SDK）。
 - `Runtime/`
   调度器所需的状态信息，用于安全地延续同一个 Claude 会话。
 
@@ -272,7 +274,7 @@ Memory/
 
 `skills/` 存储智能体可以有意识地加载和运行的可复用能力。
 
-技能如何编写不在此处规定。技能由 codex/claude runtime 自动加载，无需在 AGENTS.md 中额外说明。
+技能如何编写不在此处规定。技能由 Codex / Claude runtime 自动加载，无需在 AGENTS.md 中额外说明。
 
 ### 4.2 边界
 
@@ -341,20 +343,27 @@ Memory/
 
 ### 6.1 目的
 
-心跳是框架层的编排机制，用于定期决定是否继续在同一 Claude 会话上工作。
+心跳是框架层的编排机制，用于定期决定是否继续在同一个 provider 会话上工作。
 
-通过 `run.py`（基于 `claude-agent-sdk`）实现。
+Claude 通过 `run.py`（基于 `claude-agent-sdk`）实现。
+Codex 通过 `run_codex.mjs`（基于官方 Codex SDK）实现。
 
 默认间隔：每 20 分钟。
 
 ### 6.2 运行时
 
-使用 Claude Agent SDK（Python）作为唯一运行时：
+支持两套运行时：
 
-- `claude-agent-sdk` 提供：工具执行、会话管理、流式输出
-- 会话持久化：通过 `ResultMessage.session_id` 获取会话 ID，下次心跳通过 `resume=session_id` 恢复上下文
-- 自主执行：`permission_mode="bypassPermissions"` + `allowed_tools` 白名单
-- 安全边界：`max_turns` 和 `max_budget_usd` 限制每次心跳的资源消耗
+- Claude runtime
+  - `claude-agent-sdk` 提供：工具执行、会话管理、流式输出
+  - 会话持久化：通过 `ResultMessage.session_id` 获取会话 ID，下次心跳通过 `resume=session_id` 恢复上下文
+  - 自主执行：`permission_mode="bypassPermissions"` + `allowed_tools` 白名单
+  - 安全边界：`max_turns` 和 `max_budget_usd` 限制每次心跳的资源消耗
+- Codex runtime
+  - 基于官方 Codex SDK（TypeScript / Node.js）
+  - 会话持久化：Codex thread 由 SDK / CLI 持久化在 `~/.codex/sessions`，本地运行时额外保存 `Runtime/codex_thread_id`
+  - 轨迹能力：通过 `runStreamed()` 捕获完整事件流，并追加写入 `Runtime/codex_events.jsonl`
+  - 工具能力：沿用 Codex 自带的工具体系与认证方式，而不是额外再包一层 Python agent SDK
 
 ### 6.3 循环
 
@@ -362,7 +371,7 @@ Memory/
 
 1. 先从 `mailbox/MAILBOX.jsonl` 读取新消息
 2. 如果 `awaiting_human = true` 且没有新的人类消息，结束本次运行
-3. 如果没别的情况，恢复上次会话（`resume=session_id`）继续工作
+3. 如果没别的情况，恢复上次会话继续工作
 
 如果桥接层（例如飞书桥）在智能体运行期间写入了新的人类消息：
 

@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CREATE_AGENT="${SCRIPT_DIR}/create-agent"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./bootstrap-runtime \
+    --goal "Goal text" \
+    --provider codex|claude \
+    --interval 20 \
+    --workdir /abs/path/to/runtime \
+    --feishu-app-id xxx \
+    --feishu-app-secret yyy \
+    --feishu-chat-id oc_xxx
+
+Optional:
+  --goal-file /path/to/goal.txt
+  --allowed-user-ids open_id_1,open_id_2
+EOF
+}
+
+GOAL=""
+GOAL_FILE=""
+PROVIDER=""
+INTERVAL=""
+WORKDIR=""
+FEISHU_APP_ID=""
+FEISHU_APP_SECRET=""
+FEISHU_CHAT_ID=""
+ALLOWED_USER_IDS=""
+
+resolve_path() {
+  python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).expanduser().resolve())
+PY
+}
+
+derive_agent_name() {
+  local dir="$1"
+  local name
+  name="$(basename "$dir")"
+  if [[ -z "$name" || "$name" == "/" || "$name" == "." ]]; then
+    name="task-forge-agent"
+  fi
+  echo "$name"
+}
+
+is_task_forge_workspace() {
+  local dir="$1"
+  [[ -f "${dir}/AGENTS.md" ]] &&
+  [[ -f "${dir}/mailbox/MAILBOX.jsonl" ]] &&
+  [[ -x "${dir}/start-codex.sh" ]] &&
+  [[ -x "${dir}/start-claude.sh" ]] &&
+  [[ -f "${dir}/requirements.txt" ]]
+}
+
+write_feishu_env() {
+  cat > "${WORKDIR}/mailbox_bridge.env" <<EOF
+FEISHU_APP_ID=${FEISHU_APP_ID}
+FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+FEISHU_CHAT_ID=${FEISHU_CHAT_ID}
+ALLOWED_USER_IDS=${ALLOWED_USER_IDS}
+FEISHU_OUTBOUND_TASK_PREFIX=0
+FEISHU_MAILBOX_POLL_INTERVAL=1
+EOF
+}
+
+ensure_workspace() {
+  if [[ ! -e "${WORKDIR}" ]]; then
+    local agent_name
+    agent_name="$(derive_agent_name "${WORKDIR}")"
+    "${CREATE_AGENT}" "${WORKDIR}" "${agent_name}" >/dev/null
+    return
+  fi
+
+  if ! is_task_forge_workspace "${WORKDIR}"; then
+    echo "Error: ${WORKDIR} exists but is not a task-forge workspace."
+    exit 1
+  fi
+}
+
+ensure_python_deps() {
+  (
+    cd "${WORKDIR}"
+    uv venv >/dev/null
+    uv pip install --python .venv/bin/python -r requirements.txt >/dev/null
+  )
+}
+
+ensure_node_deps() {
+  if [[ "${PROVIDER}" != "codex" ]]; then
+    return
+  fi
+
+  (
+    cd "${WORKDIR}"
+    npm install --no-fund --no-audit >/dev/null
+  )
+}
+
+seed_initial_goal() {
+  local result
+  result="$(
+    WORKDIR="${WORKDIR}" GOAL="${GOAL}" python3 - <<'PY'
+from pathlib import Path
+import os
+import sys
+
+root = Path(os.environ["WORKDIR"])
+goal = os.environ["GOAL"].strip()
+
+sys.path.insert(0, str(root))
+from mailbox_io import append_message, read_messages
+
+mailbox_path = root / "mailbox" / "MAILBOX.jsonl"
+messages = read_messages(mailbox_path)
+has_user_goal = any(
+    msg.get("role") == "human" and msg.get("task_id") != "task.system.init"
+    for msg in messages
+)
+
+if has_user_goal:
+    print("skipped")
+else:
+    append_message(
+        mailbox_path,
+        role="human",
+        task_id="task.user.goal",
+        message=goal,
+    )
+    print("seeded")
+PY
+  )"
+
+  echo "${result}"
+}
+
+read_pid_file() {
+  local path="$1"
+  if [[ -f "${path}" ]]; then
+    tr -d '[:space:]' < "${path}"
+  fi
+}
+
+is_running() {
+  local pid="$1"
+  kill -0 "${pid}" 2>/dev/null
+}
+
+ensure_started() {
+  local runner_pid
+  local bridge_pid
+
+  runner_pid="$(read_pid_file "${WORKDIR}/Runtime/pid")"
+  bridge_pid="$(read_pid_file "${WORKDIR}/Runtime/bridge.pid")"
+
+  if [[ -z "${runner_pid}" ]] || ! is_running "${runner_pid}"; then
+    echo "Error: runtime failed to stay up."
+    echo "Check: ${WORKDIR}/Runtime/${PROVIDER}.log"
+    exit 1
+  fi
+
+  if [[ -z "${bridge_pid}" ]] || ! is_running "${bridge_pid}"; then
+    echo "Error: Feishu bridge failed to stay up."
+    echo "Check: ${WORKDIR}/Runtime/mailbox-feishu-bridge.log"
+    exit 1
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --goal)
+      GOAL="$2"
+      shift 2
+      ;;
+    --goal-file)
+      GOAL_FILE="$2"
+      shift 2
+      ;;
+    --provider)
+      PROVIDER="$2"
+      shift 2
+      ;;
+    --interval)
+      INTERVAL="$2"
+      shift 2
+      ;;
+    --workdir)
+      WORKDIR="$2"
+      shift 2
+      ;;
+    --feishu-app-id)
+      FEISHU_APP_ID="$2"
+      shift 2
+      ;;
+    --feishu-app-secret)
+      FEISHU_APP_SECRET="$2"
+      shift 2
+      ;;
+    --feishu-chat-id)
+      FEISHU_CHAT_ID="$2"
+      shift 2
+      ;;
+    --allowed-user-ids)
+      ALLOWED_USER_IDS="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -n "${GOAL_FILE}" ]]; then
+  if [[ ! -f "${GOAL_FILE}" ]]; then
+    echo "Error: goal file not found: ${GOAL_FILE}"
+    exit 1
+  fi
+  GOAL="$(< "${GOAL_FILE}")"
+fi
+
+if [[ -z "${GOAL//[[:space:]]/}" ]]; then
+  echo "Error: --goal or --goal-file is required."
+  exit 1
+fi
+
+if [[ "${PROVIDER}" != "codex" && "${PROVIDER}" != "claude" ]]; then
+  echo "Error: --provider must be codex or claude."
+  exit 1
+fi
+
+if ! [[ "${INTERVAL}" =~ ^[0-9]+$ ]]; then
+  echo "Error: --interval must be a non-negative integer."
+  exit 1
+fi
+
+if [[ -z "${WORKDIR}" ]]; then
+  echo "Error: --workdir is required."
+  exit 1
+fi
+
+if [[ -z "${FEISHU_APP_ID}" || -z "${FEISHU_APP_SECRET}" || -z "${FEISHU_CHAT_ID}" ]]; then
+  echo "Error: Feishu config is required: --feishu-app-id, --feishu-app-secret, --feishu-chat-id."
+  exit 1
+fi
+
+WORKDIR="$(resolve_path "${WORKDIR}")"
+
+ensure_workspace
+write_feishu_env
+ensure_python_deps
+ensure_node_deps
+
+GOAL_STATUS="$(seed_initial_goal)"
+
+(
+  cd "${WORKDIR}"
+  ./stop-agent.sh >/dev/null 2>&1 || true
+  if [[ "${PROVIDER}" == "codex" ]]; then
+    ./start-codex.sh --interval "${INTERVAL}" >/dev/null
+  else
+    ./start-claude.sh --interval "${INTERVAL}" >/dev/null
+  fi
+)
+
+sleep 2
+ensure_started
+
+echo "Runtime ready"
+echo "Workdir: ${WORKDIR}"
+echo "Provider: ${PROVIDER}"
+echo "Interval: ${INTERVAL}"
+echo "Goal seeded: ${GOAL_STATUS}"
+echo "Runner PID: $(read_pid_file "${WORKDIR}/Runtime/pid")"
+echo "Bridge PID: $(read_pid_file "${WORKDIR}/Runtime/bridge.pid")"

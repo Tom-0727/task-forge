@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RUNTIME_DIR="${AGENT_DIR}/Runtime"
+RUNNER_PID_FILE="${RUNTIME_DIR}/pid"
+BRIDGE_PID_FILE="${RUNTIME_DIR}/bridge.pid"
+PROVIDER_FILE="${RUNTIME_DIR}/runtime_provider"
+STATE_FILE="${RUNTIME_DIR}/state"
+CLAUDE_SESSION_FILE="${RUNTIME_DIR}/claude_session_id"
+CODEX_THREAD_FILE="${RUNTIME_DIR}/codex_thread_id"
+
+is_running() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null
+}
+
+read_value() {
+  local path="$1"
+  if [[ -f "$path" ]]; then
+    tr -d '[:space:]' < "$path"
+  fi
+}
+
+print_process_status() {
+  local label="$1"
+  local path="$2"
+  local pid
+  pid="$(read_value "$path")"
+  if [[ -z "${pid}" ]]; then
+    echo "${label}: stopped"
+    return
+  fi
+  if is_running "$pid"; then
+    echo "${label}: running (PID ${pid})"
+  else
+    echo "${label}: stale PID file (${pid})"
+  fi
+}
+
+echo "Agent: {{AGENT_NAME}}"
+echo "Directory: ${AGENT_DIR}"
+
+provider="$(read_value "$PROVIDER_FILE")"
+state="$(read_value "$STATE_FILE")"
+
+echo "Active runtime: ${provider:-none}"
+echo "Runtime state: ${state:-unknown}"
+
+print_process_status "Runner" "$RUNNER_PID_FILE"
+print_process_status "Feishu bridge" "$BRIDGE_PID_FILE"
+
+claude_session="$(read_value "$CLAUDE_SESSION_FILE")"
+codex_thread="$(read_value "$CODEX_THREAD_FILE")"
+
+echo "Claude session: ${claude_session:-none}"
+echo "Codex thread: ${codex_thread:-none}"
+echo "Logs: ${RUNTIME_DIR}/claude.log, ${RUNTIME_DIR}/codex.log, ${RUNTIME_DIR}/codex_events.jsonl, ${RUNTIME_DIR}/mailbox-feishu-bridge.log"

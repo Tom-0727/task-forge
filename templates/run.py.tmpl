@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""run.py — Heartbeat launcher for {{AGENT_NAME}}
+"""run.py — Claude heartbeat launcher for {{AGENT_NAME}}
 
 Created: {{CREATED_AT}}
 
@@ -31,7 +31,9 @@ MAILBOX = AGENT_DIR / "mailbox" / "MAILBOX.jsonl"
 PID_FILE = RUNTIME_DIR / "pid"
 HEARTBEAT_FILE = RUNTIME_DIR / "last_heartbeat"
 STATE_FILE = RUNTIME_DIR / "state"
-SESSION_FILE = RUNTIME_DIR / "session_id"
+PROVIDER_FILE = RUNTIME_DIR / "runtime_provider"
+SESSION_FILE = RUNTIME_DIR / "claude_session_id"
+LEGACY_SESSION_FILE = RUNTIME_DIR / "session_id"
 AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
 PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
 
@@ -66,20 +68,32 @@ def check_and_write_pid():
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 
     if PID_FILE.exists():
-        old_pid = int(PID_FILE.read_text().strip())
         try:
-            os.kill(old_pid, 0)
-            print(f"Error: {{AGENT_NAME}} is already running (PID {old_pid})")
-            sys.exit(1)
-        except OSError:
-            log(f"Stale PID file found (PID {old_pid} not running). Cleaning up.")
-            PID_FILE.unlink()
+            old_pid = int(PID_FILE.read_text().strip())
+        except ValueError:
+            log("Invalid PID file found. Cleaning up.")
+            PID_FILE.unlink(missing_ok=True)
+            old_pid = None
+        if old_pid is None:
+            pass
+        else:
+            try:
+                os.kill(old_pid, 0)
+                provider = PROVIDER_FILE.read_text().strip() if PROVIDER_FILE.exists() else "unknown"
+                print(f"Error: {{AGENT_NAME}} runtime is already running ({provider}, PID {old_pid})")
+                sys.exit(1)
+            except OSError:
+                log(f"Stale PID file found (PID {old_pid} not running). Cleaning up.")
+                PID_FILE.unlink()
+                PROVIDER_FILE.unlink(missing_ok=True)
 
     PID_FILE.write_text(str(os.getpid()))
+    PROVIDER_FILE.write_text("claude")
 
 
 def cleanup_pid():
     PID_FILE.unlink(missing_ok=True)
+    PROVIDER_FILE.unlink(missing_ok=True)
     STATE_FILE.write_text("stopped")
 
 
@@ -128,6 +142,9 @@ def check_awaiting_human() -> bool:
 def load_session_id() -> str | None:
     if SESSION_FILE.exists():
         sid = SESSION_FILE.read_text().strip()
+        return sid if sid else None
+    if LEGACY_SESSION_FILE.exists():
+        sid = LEGACY_SESSION_FILE.read_text().strip()
         return sid if sid else None
     return None
 
@@ -196,6 +213,7 @@ def build_prompt(first_heartbeat: bool, pending_human: dict | None) -> str:
             "Read AGENTS.md to understand your behavioral rules.\n"
             "Read mailbox/MAILBOX.jsonl for any initial instructions.\n"
             "Use the mailbox-send skill for any agent-authored mailbox message.\n"
+            "If you need to pause for a human reply, use mailbox-send with its await-reply option.\n"
             "Then begin working on your assigned task.\n\n"
             f"Working directory: {AGENT_DIR}"
         )
@@ -203,8 +221,7 @@ def build_prompt(first_heartbeat: bool, pending_human: dict | None) -> str:
         return (
             "Heartbeat wakeup for {{AGENT_NAME}}.\n\n"
             "1. Read mailbox/MAILBOX.jsonl for new messages.\n"
-            "2. If awaiting human input and no new human message, "
-            "write 'awaiting' to Runtime/awaiting_human and stop.\n"
+            "2. If you need to pause for a human reply, use mailbox-send with its await-reply option and stop.\n"
             "3. Use the mailbox-send skill for any agent-authored mailbox message.\n"
             "4. Otherwise, continue your current work.\n\n"
             f"Working directory: {AGENT_DIR}"
@@ -276,12 +293,12 @@ async def main():
 
     check_and_write_pid()
 
-    print("╔══════════════════════════════════════════════════════════╗")
-    print("║  {{AGENT_NAME}} — Starting                              ")
-    print(f"║  Interval:  {args.interval} minutes                    ")
-    print(f"║  PID:       {os.getpid()}                              ")
-    print(f"║  Directory: {AGENT_DIR}                                ")
-    print("╚══════════════════════════════════════════════════════════╝")
+    print("============================================================")
+    print("{{AGENT_NAME}} - Claude runtime starting")
+    print(f"Interval:  {args.interval} minutes")
+    print(f"PID:       {os.getpid()}")
+    print(f"Directory: {AGENT_DIR}")
+    print("============================================================")
     print()
 
     first_heartbeat = load_session_id() is None

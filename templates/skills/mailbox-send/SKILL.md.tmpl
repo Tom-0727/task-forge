@@ -1,6 +1,6 @@
 ---
 name: mailbox-send
-description: Append an agent-authored message to mailbox/MAILBOX.jsonl. Use this whenever you need to send a progress update, ask the human for a decision, or report a blocker.
+description: Append an agent-authored message to mailbox/MAILBOX.jsonl. Use this whenever you need to send a progress update, ask the human for a decision, report a blocker, or pause for a human reply.
 ---
 
 # mailbox-send
@@ -13,20 +13,27 @@ Read `mailbox/README.md`.
 
 ## Command
 
-Single-line message:
+Progress update:
 
 ```bash
-uv run python skills/mailbox-send/scripts/send_mailbox.py --task-id <task_id> --message "Need decision on next step."
+uv run python skills/mailbox-send/scripts/send_mailbox.py --kind update --message "Implemented the first pass."
+```
+
+Need a human decision and pause:
+
+```bash
+uv run python skills/mailbox-send/scripts/send_mailbox.py --kind decision --await-reply --message "Need decision: keep Claude support or remove it."
 ```
 
 Multi-line message from stdin:
 
 ```bash
-cat /tmp/message.txt | uv run python skills/mailbox-send/scripts/send_mailbox.py --task-id <task_id>
+cat /tmp/message.txt | uv run python skills/mailbox-send/scripts/send_mailbox.py --kind blocker --await-reply
 ```
 
 ## Rules
 
 - One mailbox entry per distinct update or request.
 - Keep messages concise and decision-oriented.
+- Use `--await-reply` only when you truly need to pause until a human answers.
 - The script only appends new JSONL entries; it never rewrites old lines.

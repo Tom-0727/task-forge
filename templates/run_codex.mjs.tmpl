@@ -1,0 +1,557 @@
+#!/usr/bin/env node
+/* run_codex.mjs — Codex heartbeat launcher for {{AGENT_NAME}}
+ *
+ * Created: {{CREATED_AT}}
+ *
+ * Usage:
+ *   node run_codex.mjs [--interval N] [--model MODEL] [--reasoning-effort LEVEL] [--sandbox MODE]
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+
+import { Codex } from "@openai/codex-sdk";
+
+const AGENT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const RUNTIME_DIR = path.join(AGENT_DIR, "Runtime");
+const PID_FILE = path.join(RUNTIME_DIR, "pid");
+const HEARTBEAT_FILE = path.join(RUNTIME_DIR, "last_heartbeat");
+const STATE_FILE = path.join(RUNTIME_DIR, "state");
+const PROVIDER_FILE = path.join(RUNTIME_DIR, "runtime_provider");
+const THREAD_FILE = path.join(RUNTIME_DIR, "codex_thread_id");
+const EVENTS_FILE = path.join(RUNTIME_DIR, "codex_events.jsonl");
+const MAILBOX = path.join(AGENT_DIR, "mailbox", "MAILBOX.jsonl");
+const AWAITING_FILE = path.join(RUNTIME_DIR, "awaiting_human");
+const PENDING_HUMAN_FILE = path.join(RUNTIME_DIR, "pending_human.json");
+
+let shutdownRequested = false;
+let currentAbortController = null;
+
+function utcnow() {
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function log(message) {
+  console.log(`[${utcnow()}] ${message}`);
+}
+
+function appendEvent(type, payload = {}) {
+  fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+  const entry = { ts: utcnow(), type, ...payload };
+  fs.appendFileSync(EVENTS_FILE, `${JSON.stringify(entry)}\n`, "utf8");
+}
+
+function truncateText(value, limit = 500) {
+  const text = String(value ?? "");
+  if (text.length <= limit) {
+    return text;
+  }
+  return `${text.slice(0, limit)}... [truncated ${text.length - limit} chars]`;
+}
+
+function parseBoolean(value) {
+  const normalized = String(value).toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(`invalid boolean value: ${value}`);
+}
+
+function parseArgs(argv) {
+  const args = {
+    interval: 20,
+    model: null,
+    reasoningEffort: "medium",
+    sandbox: "danger-full-access",
+    approvalPolicy: "never",
+    networkAccess: true,
+    webSearchMode: null,
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+
+    if (arg === "--interval") {
+      args.interval = Number(next);
+      i += 1;
+      continue;
+    }
+    if (arg === "--model") {
+      args.model = next;
+      i += 1;
+      continue;
+    }
+    if (arg === "--reasoning-effort") {
+      args.reasoningEffort = next;
+      i += 1;
+      continue;
+    }
+    if (arg === "--sandbox") {
+      args.sandbox = next;
+      i += 1;
+      continue;
+    }
+    if (arg === "--approval-policy") {
+      args.approvalPolicy = next;
+      i += 1;
+      continue;
+    }
+    if (arg === "--network-access") {
+      args.networkAccess = parseBoolean(next);
+      i += 1;
+      continue;
+    }
+    if (arg === "--web-search-mode") {
+      args.webSearchMode = next;
+      i += 1;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      printHelp();
+      process.exit(0);
+    }
+
+    throw new Error(`unknown argument: ${arg}`);
+  }
+
+  if (!Number.isInteger(args.interval) || args.interval < 0) {
+    throw new Error("--interval must be a non-negative integer");
+  }
+
+  const allowedReasoning = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+  if (!allowedReasoning.has(args.reasoningEffort)) {
+    throw new Error("--reasoning-effort must be one of minimal, low, medium, high, xhigh");
+  }
+
+  const allowedSandbox = new Set(["read-only", "workspace-write", "danger-full-access"]);
+  if (!allowedSandbox.has(args.sandbox)) {
+    throw new Error("--sandbox must be one of read-only, workspace-write, danger-full-access");
+  }
+
+  const allowedApproval = new Set(["never", "on-request", "on-failure", "untrusted"]);
+  if (!allowedApproval.has(args.approvalPolicy)) {
+    throw new Error("--approval-policy must be one of never, on-request, on-failure, untrusted");
+  }
+
+  const allowedWebSearch = new Set(["disabled", "cached", "live"]);
+  if (args.webSearchMode !== null && !allowedWebSearch.has(args.webSearchMode)) {
+    throw new Error("--web-search-mode must be one of disabled, cached, live");
+  }
+
+  return args;
+}
+
+function printHelp() {
+  console.log("Usage: node run_codex.mjs [options]");
+  console.log("");
+  console.log("Options:");
+  console.log("  --interval N              Heartbeat interval in minutes (default: 20)");
+  console.log("  --model MODEL             Codex model override");
+  console.log("  --reasoning-effort LEVEL  minimal|low|medium|high|xhigh (default: medium)");
+  console.log("  --sandbox MODE            read-only|workspace-write|danger-full-access (default: danger-full-access)");
+  console.log("  --approval-policy MODE    never|on-request|on-failure|untrusted (default: never)");
+  console.log("  --network-access BOOL     true|false (default: true)");
+  console.log("  --web-search-mode MODE    disabled|cached|live");
+}
+
+function fileExists(filePath) {
+  return fs.existsSync(filePath);
+}
+
+function readText(filePath) {
+  return fs.readFileSync(filePath, "utf8");
+}
+
+function writeText(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, value, "utf8");
+}
+
+function removeFile(filePath) {
+  try {
+    fs.unlinkSync(filePath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function checkAndWritePid() {
+  fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+
+  if (fileExists(PID_FILE)) {
+    const rawPid = readText(PID_FILE).trim();
+    const oldPid = Number.parseInt(rawPid, 10);
+
+    if (!Number.isInteger(oldPid)) {
+      log("Invalid PID file found. Cleaning up.");
+      removeFile(PID_FILE);
+    } else if (isRunning(oldPid)) {
+      const provider = fileExists(PROVIDER_FILE) ? readText(PROVIDER_FILE).trim() : "unknown";
+      console.error(`Error: {{AGENT_NAME}} runtime is already running (${provider}, PID ${oldPid})`);
+      process.exit(1);
+    } else {
+      log(`Stale PID file found (PID ${oldPid} not running). Cleaning up.`);
+      removeFile(PID_FILE);
+      removeFile(PROVIDER_FILE);
+    }
+  }
+
+  writeText(PID_FILE, `${process.pid}`);
+  writeText(PROVIDER_FILE, "codex");
+}
+
+function cleanupPid() {
+  removeFile(PID_FILE);
+  removeFile(PROVIDER_FILE);
+  writeText(STATE_FILE, "stopped");
+}
+
+function loadJsonFile(filePath) {
+  if (!fileExists(filePath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(readText(filePath));
+  } catch {
+    return null;
+  }
+}
+
+function loadThreadId() {
+  if (!fileExists(THREAD_FILE)) {
+    return null;
+  }
+  const threadId = readText(THREAD_FILE).trim();
+  return threadId || null;
+}
+
+function saveThreadId(threadId) {
+  writeText(THREAD_FILE, threadId);
+}
+
+function hasNewHumanMessages() {
+  if (!fileExists(MAILBOX)) {
+    return false;
+  }
+
+  let lastAgentLine = -1;
+  let lastHumanLine = -1;
+  const lines = readText(MAILBOX).split(/\r?\n/);
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    try {
+      const message = JSON.parse(trimmed);
+      if (message.role === "agent") {
+        lastAgentLine = index;
+      } else if (message.role === "human") {
+        lastHumanLine = index;
+      }
+    } catch {
+      // Ignore malformed mailbox lines.
+    }
+  });
+
+  if (lastHumanLine < 0) {
+    return false;
+  }
+  if (lastAgentLine < 0) {
+    return true;
+  }
+  return lastHumanLine > lastAgentLine;
+}
+
+function loadPendingHuman() {
+  const data = loadJsonFile(PENDING_HUMAN_FILE);
+  return data && typeof data === "object" ? data : null;
+}
+
+function clearPendingHumanIfUnchanged(expectedMailboxId) {
+  if (!expectedMailboxId || !fileExists(PENDING_HUMAN_FILE)) {
+    return;
+  }
+
+  const current = loadPendingHuman();
+  if (current?.mailbox_id === expectedMailboxId) {
+    removeFile(PENDING_HUMAN_FILE);
+  }
+}
+
+function checkAwaitingHuman() {
+  if (!fileExists(AWAITING_FILE)) {
+    return false;
+  }
+
+  if (!loadPendingHuman() && !hasNewHumanMessages()) {
+    log("Awaiting human response. Skipping heartbeat.");
+    return true;
+  }
+
+  removeFile(AWAITING_FILE);
+  return false;
+}
+
+async function sleepWithWakeup(minutes) {
+  const totalSeconds = Math.max(0, minutes * 60);
+
+  for (let slept = 0; slept < totalSeconds && !shutdownRequested; slept += 1) {
+    if (loadPendingHuman()) {
+      log("Pending human mailbox message detected. Waking immediately.");
+      return;
+    }
+    if (fileExists(AWAITING_FILE) && hasNewHumanMessages()) {
+      log("New human mailbox message detected while awaiting input. Waking immediately.");
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+function buildPrompt(firstHeartbeat, pendingHuman) {
+  if (pendingHuman) {
+    const pendingId = pendingHuman.mailbox_id || "unknown";
+    return [
+      "New human mailbox messages have arrived.",
+      "",
+      "1. Read mailbox/MAILBOX.jsonl immediately.",
+      "2. Find and address the newest human message(s).",
+      "3. Continue the same task on the current Codex thread.",
+      "4. If you need to reply, use the mailbox-send skill or its script.",
+      "",
+      `Latest pending mailbox id: ${pendingId}`,
+      `Working directory: ${AGENT_DIR}`,
+    ].join("\n");
+  }
+
+  if (firstHeartbeat) {
+    return [
+      "You are {{AGENT_NAME}}. This is your first heartbeat on the Codex runtime.",
+      "",
+      "Read AGENTS.md to understand your behavioral rules.",
+      "Read mailbox/README.md before writing mailbox messages.",
+      "Read mailbox/MAILBOX.jsonl for initial instructions.",
+      "Use the mailbox-send skill or its script for agent-authored mailbox messages.",
+      "If you need to pause for a human reply, use mailbox-send with its await-reply option and stop.",
+      "When the human replies, the runtime will clear Runtime/awaiting_human before resuming the same Codex thread.",
+      "Then begin working on your assigned task.",
+      "",
+      `Working directory: ${AGENT_DIR}`,
+    ].join("\n");
+  }
+
+  return [
+    "Heartbeat wakeup for {{AGENT_NAME}} on the Codex runtime.",
+    "",
+    "1. Read mailbox/MAILBOX.jsonl for new messages.",
+    "2. If blocked on a human reply, use mailbox-send with its await-reply option and stop.",
+    "3. Use the mailbox-send skill or its script for agent-authored mailbox messages.",
+    "4. Otherwise continue your current work on the same Codex thread.",
+    "",
+    `Working directory: ${AGENT_DIR}`,
+  ].join("\n");
+}
+
+function buildCodex() {
+  const apiKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || undefined;
+  return apiKey ? new Codex({ apiKey }) : new Codex();
+}
+
+function buildThreadOptions(args) {
+  const options = {
+    workingDirectory: AGENT_DIR,
+    skipGitRepoCheck: true,
+    sandboxMode: args.sandbox,
+    approvalPolicy: args.approvalPolicy,
+    modelReasoningEffort: args.reasoningEffort,
+    networkAccessEnabled: args.networkAccess,
+  };
+
+  if (args.model) {
+    options.model = args.model;
+  }
+
+  if (args.webSearchMode) {
+    options.webSearchMode = args.webSearchMode;
+    options.webSearchEnabled = args.webSearchMode !== "disabled";
+  }
+
+  return options;
+}
+
+async function invokeAgent(prompt, args) {
+  appendEvent("heartbeat_prompt", { prompt });
+
+  const codex = buildCodex();
+  const threadOptions = buildThreadOptions(args);
+  const savedThreadId = loadThreadId();
+  const thread = savedThreadId
+    ? codex.resumeThread(savedThreadId, threadOptions)
+    : codex.startThread(threadOptions);
+
+  log(savedThreadId ? `Resuming Codex thread: ${savedThreadId}` : "Starting a new Codex thread.");
+
+  const collectedItems = new Map();
+  let finalResponse = "";
+  let usage = null;
+  let observedThreadId = savedThreadId;
+
+  currentAbortController = new AbortController();
+
+  try {
+    const { events } = await thread.runStreamed(prompt, {
+      signal: currentAbortController.signal,
+    });
+
+    for await (const event of events) {
+      appendEvent("sdk_event", { event });
+
+      if (event.type === "thread.started" && event.thread_id) {
+        observedThreadId = event.thread_id;
+        saveThreadId(event.thread_id);
+      } else if (
+        event.type === "item.started" ||
+        event.type === "item.updated" ||
+        event.type === "item.completed"
+      ) {
+        const item = event.item;
+        if (item?.id) {
+          collectedItems.set(item.id, item);
+        }
+        if (item?.type === "agent_message" && typeof item.text === "string") {
+          finalResponse = item.text;
+        }
+      } else if (event.type === "turn.completed") {
+        usage = event.usage;
+      } else if (event.type === "turn.failed") {
+        throw new Error(event.error?.message || "Codex turn failed");
+      } else if (event.type === "error") {
+        throw new Error(event.message || "Codex runtime error");
+      }
+    }
+  } finally {
+    currentAbortController = null;
+  }
+
+  if (thread.id) {
+    observedThreadId = thread.id;
+    saveThreadId(thread.id);
+  }
+
+  if (finalResponse) {
+    log(`Agent: ${truncateText(finalResponse, 200)}`);
+  }
+
+  appendEvent("turn_summary", {
+    thread_id: observedThreadId,
+    item_count: collectedItems.size,
+    usage,
+    final_response: truncateText(finalResponse, 4000),
+  });
+
+  return observedThreadId;
+}
+
+function handleSignal(signalName) {
+  log(`Received signal ${signalName}. Shutting down {{AGENT_NAME}}...`);
+  shutdownRequested = true;
+  if (currentAbortController) {
+    currentAbortController.abort();
+  }
+}
+
+async function main() {
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(String(error.message || error));
+    printHelp();
+    process.exit(1);
+  }
+
+  process.on("SIGINT", () => handleSignal("SIGINT"));
+  process.on("SIGTERM", () => handleSignal("SIGTERM"));
+
+  checkAndWritePid();
+
+  console.log("============================================================");
+  console.log("{{AGENT_NAME}} - Codex runtime starting");
+  console.log(`Interval:    ${args.interval} minutes`);
+  console.log(`Model:       ${args.model || "codex default"}`);
+  console.log(`Reasoning:   ${args.reasoningEffort}`);
+  console.log(`Sandbox:     ${args.sandbox}`);
+  console.log(`PID:         ${process.pid}`);
+  console.log(`Directory:   ${AGENT_DIR}`);
+  console.log("============================================================");
+  console.log("");
+
+  let firstHeartbeat = loadThreadId() === null;
+
+  try {
+    while (!shutdownRequested) {
+      writeText(HEARTBEAT_FILE, utcnow());
+      writeText(STATE_FILE, "running");
+      log("Heartbeat - starting");
+
+      if (checkAwaitingHuman()) {
+        log(`Sleeping ${args.interval} minutes...`);
+        await sleepWithWakeup(args.interval);
+        continue;
+      }
+
+      const pendingHuman = loadPendingHuman();
+      const pendingBefore = pendingHuman?.mailbox_id || null;
+      const prompt = buildPrompt(firstHeartbeat, pendingHuman);
+
+      try {
+        await invokeAgent(prompt, args);
+      } catch (error) {
+        const message = String(error?.message || error);
+        if (shutdownRequested && message.includes("aborted")) {
+          log("Codex turn aborted during shutdown.");
+        } else {
+          log(`Runtime error: ${message}`);
+          appendEvent("runtime_error", { message });
+        }
+      } finally {
+        clearPendingHumanIfUnchanged(pendingBefore);
+      }
+
+      firstHeartbeat = false;
+
+      if (loadPendingHuman()) {
+        log("More human mailbox messages are pending. Continuing immediately.");
+        continue;
+      }
+
+      log(`Heartbeat complete. Sleeping ${args.interval} minutes...`);
+      await sleepWithWakeup(args.interval);
+    }
+  } finally {
+    cleanupPid();
+    log("{{AGENT_NAME}} stopped.");
+  }
+}
+
+await main();

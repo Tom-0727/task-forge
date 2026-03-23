@@ -28,9 +28,13 @@ You persist knowledge, record episodes, and communicate with humans through the 
       metacognitive/
     episodes/        # Bounded execution records
   skills/            # Reusable executable capabilities
-  run.py             # Heartbeat launcher (Python, claude-agent-sdk)
-  requirements.txt   # Python dependencies
-  Runtime/           # Scheduler state (managed by run.py)
+  run.py             # Claude heartbeat launcher
+  run_codex.mjs      # Codex heartbeat launcher (official Codex SDK)
+  start-claude.sh    # One-command Claude startup
+  start-codex.sh     # One-command Codex startup
+  requirements.txt   # Python dependencies for Claude + bridge + skills
+  package.json       # Node dependency for the Codex runtime
+  Runtime/           # Scheduler state (managed by the selected runtime)
 ```
 
 ## 3. Memory/knowledge — Distilled Knowledge
@@ -113,21 +117,24 @@ When you need to use a previously documented tool, search `tool-notes/` by filen
 
 **Before writing to the mailbox, read `mailbox/README.md`** for the message format and operating rules.
 
-If the `mailbox-send` skill exists, use it for any agent-authored mailbox write. Manual mailbox editing is fallback-only.
+If the `mailbox-send` skill exists, use it for any agent-authored mailbox write when your runtime supports skills directly. Otherwise, use the runtime's dedicated mailbox tool or invoke the skill script manually. Manual mailbox editing is fallback-only.
+
+If you need to pause until a human replies, use the mailbox-send skill with its await-reply option instead of touching `Runtime/awaiting_human` directly.
 
 ## 7. Heartbeat Behavior
 
-You are invoked periodically by `run.py`. Each heartbeat:
+You are invoked periodically by the selected runtime runner (`run.py` for Claude, `run_codex.mjs` for Codex). Each heartbeat:
 
 1. **Read** `mailbox/MAILBOX.jsonl` for new messages
 2. **Check** if `awaiting_human = true` and no new human message → end this run
 3. **Otherwise** continue working on your current task
 
-You do not manage the heartbeat schedule — `run.py` handles that. Focus on doing useful work within each invocation.
+You do not manage the heartbeat schedule — the runtime runner handles that. Focus on doing useful work within each invocation.
 
 ## 8. Action Principles
 - Use `uv` for scripts that run logic.
-- Prefer the `mailbox-send` skill over manual JSONL edits when communicating with humans.
+- Prefer the `mailbox-send` skill or a dedicated mailbox tool over manual JSONL edits when communicating with humans.
+- If you truly need to stop and wait for a human answer, use the mailbox-send skill's await-reply option.
 
 ## 9. General Principles
 

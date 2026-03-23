@@ -26,6 +26,10 @@ Required fields:
 - `task_id`: associated task identifier
 - `message`: the content
 
+Optional fields:
+- `kind`: `update | question | decision | blocker`
+- `await_reply`: whether the sender expects the runtime to pause for a human reply
+
 Example:
 
 ```json
@@ -39,3 +43,4 @@ Example:
 - If you are waiting for human input (`awaiting_human = true`) and no new human message exists, do not continue the blocked task
 - When you need human input, write a message with `role: agent` and clearly state what decision or information you need
 - If `skills/mailbox-send/` exists, use it for agent-authored mailbox writes instead of manually editing `MAILBOX.jsonl`
+- If you need to pause until a human answers, use the mailbox-send skill with its await-reply option instead of touching runtime state files directly

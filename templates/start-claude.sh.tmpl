@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
+RUNTIME_DIR="${AGENT_DIR}/Runtime"
+PYTHON_BIN="${AGENT_DIR}/.venv/bin/python"
+RUNNER_PID_FILE="${RUNTIME_DIR}/pid"
+PROVIDER_FILE="${RUNTIME_DIR}/runtime_provider"
+BRIDGE_PID_FILE="${RUNTIME_DIR}/bridge.pid"
+RUNNER_LOG="${RUNTIME_DIR}/claude.log"
+BRIDGE_LOG="${RUNTIME_DIR}/mailbox-feishu-bridge.log"
+
+is_running() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null
+}
+
+read_pid() {
+  local path="$1"
+  if [[ -f "$path" ]]; then
+    tr -d '[:space:]' < "$path"
+  fi
+}
+
+cleanup_stale_pid_file() {
+  local path="$1"
+  local pid
+  pid="$(read_pid "$path")"
+  if [[ -z "${pid}" ]]; then
+    rm -f "$path"
+    return
+  fi
+  if ! is_running "$pid"; then
+    rm -f "$path"
+  fi
+}
+
+start_bridge_if_configured() {
+  mkdir -p "$RUNTIME_DIR"
+  cleanup_stale_pid_file "$BRIDGE_PID_FILE"
+
+  if [[ "${TASK_FORGE_SKIP_BRIDGE:-0}" == "1" ]]; then
+    echo "Skipping Feishu bridge because TASK_FORGE_SKIP_BRIDGE=1."
+    return
+  fi
+
+  if [[ ! -f "${AGENT_DIR}/mailbox_bridge.env" ]]; then
+    echo "Feishu bridge not started. mailbox_bridge.env is missing."
+    return
+  fi
+
+  local bridge_pid
+  bridge_pid="$(read_pid "$BRIDGE_PID_FILE")"
+  if [[ -n "${bridge_pid}" ]] && is_running "$bridge_pid"; then
+    echo "Feishu bridge already running (PID ${bridge_pid})."
+    return
+  fi
+
+  nohup "${PYTHON_BIN}" "${AGENT_DIR}/mailbox_feishu_bridge.py" >"${BRIDGE_LOG}" 2>&1 &
+  bridge_pid="$!"
+  echo "${bridge_pid}" > "${BRIDGE_PID_FILE}"
+  sleep 1
+
+  if is_running "$bridge_pid"; then
+    echo "Started Feishu bridge (PID ${bridge_pid}). Log: ${BRIDGE_LOG}"
+  else
+    echo "Failed to start Feishu bridge. Check ${BRIDGE_LOG}"
+  fi
+}
+
+mkdir -p "$RUNTIME_DIR"
+
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  echo "Missing local virtualenv at ${PYTHON_BIN}."
+  echo "Run: uv venv && uv pip install --python .venv/bin/python -r requirements.txt"
+  exit 1
+fi
+
+command -v claude >/dev/null 2>&1 || {
+  echo "claude CLI is not installed or not on PATH."
+  exit 1
+}
+
+cleanup_stale_pid_file "$RUNNER_PID_FILE"
+
+active_pid="$(read_pid "$RUNNER_PID_FILE")"
+active_provider=""
+if [[ -f "$PROVIDER_FILE" ]]; then
+  active_provider="$(tr -d '[:space:]' < "$PROVIDER_FILE")"
+fi
+
+if [[ -n "${active_pid}" ]] && is_running "$active_pid"; then
+  if [[ "${active_provider}" == "claude" || -z "${active_provider}" ]]; then
+    echo "Claude runtime already running (PID ${active_pid})."
+    start_bridge_if_configured
+    exit 0
+  fi
+  echo "Another runtime is already running (${active_provider:-unknown}, PID ${active_pid})."
+  echo "Run ./stop-agent.sh before switching runtimes."
+  exit 1
+fi
+
+start_bridge_if_configured
+
+nohup "${PYTHON_BIN}" "${AGENT_DIR}/run.py" "$@" >"${RUNNER_LOG}" 2>&1 &
+launcher_pid="$!"
+
+for _ in $(seq 1 20); do
+  actual_pid="$(read_pid "$RUNNER_PID_FILE")"
+  if [[ -n "${actual_pid}" ]] && is_running "$actual_pid"; then
+    echo "Started Claude runtime (PID ${actual_pid}). Log: ${RUNNER_LOG}"
+    echo "Use ./status-agent.sh to inspect runtime state."
+    exit 0
+  fi
+  if ! is_running "$launcher_pid"; then
+    break
+  fi
+  sleep 0.5
+done
+
+echo "Failed to start Claude runtime. Check ${RUNNER_LOG}"
+exit 1

@@ -25,9 +25,30 @@ def read_message(message_arg: str | None) -> str:
     raise SystemExit("provide --message or pipe the message via stdin")
 
 
+def mark_awaiting_human(entry_id: str) -> None:
+    awaiting_path = AGENT_DIR / "Runtime" / "awaiting_human"
+    awaiting_path.parent.mkdir(parents=True, exist_ok=True)
+    awaiting_path.write_text(f"{entry_id}\n", encoding="utf-8")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Append a mailbox entry for the agent")
-    parser.add_argument("--task-id", required=True, help="Associated task identifier")
+    parser.add_argument(
+        "--task-id",
+        default="task.agent.message",
+        help="Associated task identifier; defaults to an internal agent message task",
+    )
+    parser.add_argument(
+        "--kind",
+        choices=["update", "question", "decision", "blocker"],
+        default="update",
+        help="Mailbox message kind (default: update)",
+    )
+    parser.add_argument(
+        "--await-reply",
+        action="store_true",
+        help="After sending the message, mark the runtime as awaiting a human reply",
+    )
     parser.add_argument("--message", help="Mailbox message text; if omitted, stdin is used")
     args = parser.parse_args()
 
@@ -37,7 +58,13 @@ def main() -> None:
         role="agent",
         task_id=args.task_id,
         message=read_message(args.message),
+        extra={
+            "kind": args.kind,
+            "await_reply": args.await_reply,
+        },
     )
+    if args.await_reply:
+        mark_awaiting_human(entry["id"])
     print(json.dumps({"id": entry["id"], "ts": entry["ts"]}, ensure_ascii=False))
 
 
