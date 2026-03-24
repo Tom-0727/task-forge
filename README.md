@@ -6,6 +6,21 @@ Based on the design spec in [DESIGNS.md](./DESIGNS.md).
 
 ## Quick Start
 
+Simplest startup (recommended): one command creates workspace, installs deps, seeds goal, and starts runtime.
+
+```bash
+./bootstrap-runtime \
+  --goal "Research OpenAI Agents SDK examples" \
+  --provider codex \
+  --interaction web-ui \
+  --interval 20 \
+  --workdir ~/agents/researcher
+```
+
+Then open `http://127.0.0.1:8080`.
+
+Manual setup (if you want full step-by-step control):
+
 ```bash
 ./create-agent <target-directory> <agent-name>
 ```
