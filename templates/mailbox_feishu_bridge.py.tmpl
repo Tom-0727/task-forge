@@ -31,6 +31,19 @@ MAILBOX = AGENT_DIR / "mailbox" / "MAILBOX.jsonl"
 RUNTIME_DIR = AGENT_DIR / "Runtime"
 STATE_FILE = RUNTIME_DIR / "bridge-state.json"
 PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
+RUNTIME_STATE_FILE = RUNTIME_DIR / "state"
+PID_FILE = RUNTIME_DIR / "pid"
+BRIDGE_PID_FILE = RUNTIME_DIR / "bridge.pid"
+PROVIDER_FILE = RUNTIME_DIR / "runtime_provider"
+HEARTBEAT_FILE = RUNTIME_DIR / "last_heartbeat"
+AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
+MANUAL_PAUSE_FILE = RUNTIME_DIR / "manual_pause.json"
+CLAUDE_SESSION_FILE = RUNTIME_DIR / "claude_session_id"
+CODEX_THREAD_FILE = RUNTIME_DIR / "codex_thread_id"
+CLAUDE_LOG_FILE = RUNTIME_DIR / "claude.log"
+CODEX_LOG_FILE = RUNTIME_DIR / "codex.log"
+CODEX_EVENTS_FILE = RUNTIME_DIR / "codex_events.jsonl"
+COMMAND_AUDIT_FILE = RUNTIME_DIR / "bridge_commands.jsonl"
 STATE_LOCK = threading.Lock()
 client: lark.Client | None = None
 
@@ -50,6 +63,7 @@ OUTBOUND_TASK_PREFIX = os.getenv("FEISHU_OUTBOUND_TASK_PREFIX", "1").strip().low
     "off",
 }
 POLL_INTERVAL_SECONDS = max(1, int(os.getenv("FEISHU_MAILBOX_POLL_INTERVAL", "1")))
+WS_RECONNECT_SECONDS = max(1, int(os.getenv("FEISHU_WS_RECONNECT_SECONDS", "5")))
 ALLOWED_USER_IDS: set[str] = {
     value.strip()
     for value in os.getenv("ALLOWED_USER_IDS", "").split(",")
@@ -63,6 +77,227 @@ def utcnow() -> str:
 
 def log(message: str) -> None:
     print(f"[{utcnow()}] [mailbox-feishu-bridge] {message}", flush=True)
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8").strip()
+
+
+def read_json_file(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def read_pid_status(path: Path) -> tuple[str, str]:
+    if not path.exists():
+        return ("stopped", "")
+    try:
+        pid = int(read_text(path))
+    except Exception:
+        return ("stale", "")
+    if is_running(pid):
+        return ("running", str(pid))
+    return ("stale", str(pid))
+
+
+def format_age(ts: str) -> str:
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        return "unknown"
+    seconds = max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
+def format_timestamp(ts: str) -> str:
+    value = (ts or "").strip()
+    if not value:
+        return "unknown"
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return value.replace("T", " ").replace("Z", "").strip()
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def short_id(value: str, keep: int = 12) -> str:
+    value = (value or "").strip()
+    if not value:
+        return "none"
+    if len(value) <= keep:
+        return value
+    return f"{value[:keep]}..."
+
+
+def tail_mailbox_entries(limit: int) -> list[dict]:
+    if not MAILBOX.exists():
+        return []
+
+    entries: list[dict] = []
+    for line in MAILBOX.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+
+    if limit <= 0:
+        return []
+    return entries[-limit:]
+
+
+def summarize_history_message(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "(empty)"
+    return text
+
+
+def format_history_entry(entry: dict) -> str:
+    ts = format_timestamp(str(entry.get("ts", "unknown")))
+    role = str(entry.get("role", "unknown"))
+    task_id = str(entry.get("task_id", "")).strip()
+    message = summarize_history_message(entry.get("message", ""))
+
+    prefix = f"{ts} {role}"
+    if task_id:
+        prefix = f"{prefix} {task_id}"
+    return f"{prefix}: {message}"
+
+
+def append_command_audit(payload: dict) -> None:
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    entry = {"ts": utcnow(), **payload}
+    with COMMAND_AUDIT_FILE.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def write_manual_pause(reason: str, sender_id: str, chat_id: str) -> None:
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "ts": utcnow(),
+        "source": "feishu_command",
+        "sender_id": sender_id,
+        "chat_id": chat_id,
+        "reason": reason,
+    }
+    MANUAL_PAUSE_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def command_help_text() -> str:
+    return (
+        "{{AGENT_NAME}} bridge commands\n"
+        "/help\n"
+        "/status\n"
+        "/history [N]\n"
+        "/pause [reason]\n"
+        "/resume\n"
+        "Use //text to send a literal message starting with / to the agent."
+    )
+
+
+def command_status_text() -> str:
+    provider = read_text(PROVIDER_FILE) if PROVIDER_FILE.exists() else "none"
+    runner_status, runner_pid = read_pid_status(PID_FILE)
+    bridge_status, bridge_pid = read_pid_status(BRIDGE_PID_FILE)
+    runtime_state = read_text(RUNTIME_STATE_FILE) if RUNTIME_STATE_FILE.exists() else "unknown"
+    heartbeat = read_text(HEARTBEAT_FILE) if HEARTBEAT_FILE.exists() else ""
+    heartbeat_line = "none"
+    if heartbeat:
+        heartbeat_line = f"{format_timestamp(heartbeat)} ({format_age(heartbeat)} ago)"
+
+    session_value = "none"
+    if provider == "codex" and CODEX_THREAD_FILE.exists():
+        session_value = short_id(read_text(CODEX_THREAD_FILE))
+    elif provider == "claude" and CLAUDE_SESSION_FILE.exists():
+        session_value = short_id(read_text(CLAUDE_SESSION_FILE))
+
+    pending = read_json_file(PENDING_HUMAN_FILE)
+    manual_pause = read_json_file(MANUAL_PAUSE_FILE)
+
+    lines = [
+        "{{AGENT_NAME}}",
+        f"provider: {provider}",
+        f"runner: {runner_status}" + (f" pid={runner_pid}" if runner_pid else ""),
+        f"bridge: {bridge_status}" + (f" pid={bridge_pid}" if bridge_pid else ""),
+        f"state: {runtime_state}",
+        f"last heartbeat: {heartbeat_line}",
+        f"awaiting_human: {'yes' if AWAITING_FILE.exists() else 'no'}",
+        f"manual_pause: {'yes' if MANUAL_PAUSE_FILE.exists() else 'no'}",
+        f"session: {session_value}",
+        f"pending_human: {pending.get('mailbox_id', 'none') if pending else 'none'}",
+        f"pause reason: {manual_pause.get('reason', 'none') if manual_pause else 'none'}",
+    ]
+
+    return "\n".join(lines)
+
+
+def command_history_text(limit: int) -> str:
+    limit = max(1, min(limit, 20))
+    entries = tail_mailbox_entries(limit)
+    if not entries:
+        return "No mailbox history found."
+
+    rendered = [format_history_entry(entry) for entry in entries]
+    return f"Recent mailbox history ({len(entries)}):\n" + "\n".join(rendered)
+
+
+def handle_bridge_command(text: str, sender_id: str, chat_id: str) -> tuple[bool, str]:
+    parts = text.split(maxsplit=1)
+    command = parts[0].lower()
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    if command == "/help":
+        return (True, command_help_text())
+
+    if command == "/status":
+        return (True, command_status_text())
+
+    if command == "/history":
+        try:
+            limit = int(arg) if arg else 5
+        except ValueError:
+            limit = 5
+        return (True, command_history_text(limit))
+
+    if command == "/pause":
+        reason = arg or "paused from Feishu"
+        write_manual_pause(reason, sender_id, chat_id)
+        return (True, f"Paused {{AGENT_NAME}}.\nReason: {reason}")
+
+    if command == "/resume":
+        if MANUAL_PAUSE_FILE.exists():
+            MANUAL_PAUSE_FILE.unlink(missing_ok=True)
+            return (True, f"Resumed {{AGENT_NAME}}.")
+        return (True, f"{{AGENT_NAME}} is not manually paused.")
+
+    return (
+        True,
+        f"Unknown command: {command}\nUse /help to see available commands.\nUse //text to send a literal message starting with / to the agent.",
+    )
 
 
 def load_state() -> dict:
@@ -255,6 +490,28 @@ def on_message(data: P2ImMessageReceiveV1) -> None:
 
     try_send_inbound_ack(msg.message_id)
 
+    if text.startswith("//"):
+        text = text[1:]
+    elif text.startswith("/"):
+        handled, response = handle_bridge_command(text, sender_id, msg.chat_id)
+        remember_chat_id(state, msg.chat_id)
+        state = load_state()
+        record_recent_inbound_id(state, msg.message_id)
+        save_state(state)
+        append_command_audit(
+            {
+                "sender_id": sender_id,
+                "chat_id": msg.chat_id,
+                "command": text,
+                "handled": handled,
+                "result_summary": (response.splitlines()[0] if response else "")[:200],
+            }
+        )
+        if handled and client is not None:
+            send_text(client, msg.chat_id, response)
+            log(f"Handled bridge command {text!r} from {sender_id}")
+            return
+
     entry = append_message(
         MAILBOX,
         role="human",
@@ -296,13 +553,23 @@ def main() -> None:
     )
 
     log(f"Starting bridge for {{AGENT_NAME}}")
-    ws = lark.ws.Client(
-        APP_ID,
-        APP_SECRET,
-        event_handler=event_handler,
-        log_level=lark.LogLevel.INFO,
-    )
-    ws.start()
+    while True:
+        try:
+            ws = lark.ws.Client(
+                APP_ID,
+                APP_SECRET,
+                event_handler=event_handler,
+                log_level=lark.LogLevel.INFO,
+            )
+            ws.start()
+            log(f"WebSocket closed. Reconnecting in {WS_RECONNECT_SECONDS}s.")
+        except KeyboardInterrupt:
+            log("Bridge interrupted. Exiting.")
+            raise
+        except BaseException as exc:
+            log(f"WebSocket error: {exc!r}. Reconnecting in {WS_RECONNECT_SECONDS}s.")
+
+        time.sleep(WS_RECONNECT_SECONDS)
 
 
 if __name__ == "__main__":

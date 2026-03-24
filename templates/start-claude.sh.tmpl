@@ -57,7 +57,13 @@ start_bridge_if_configured() {
     return
   fi
 
-  nohup "${PYTHON_BIN}" "${AGENT_DIR}/mailbox_feishu_bridge.py" >"${BRIDGE_LOG}" 2>&1 &
+  nohup bash -c '
+    while true; do
+      "'"${PYTHON_BIN}"'" "'"${AGENT_DIR}"'/mailbox_feishu_bridge.py" >>"'"${BRIDGE_LOG}"'" 2>&1
+      printf "[%s] [bridge-supervisor] bridge exited, restarting in 5s.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"'"${BRIDGE_LOG}"'"
+      sleep 5
+    done
+  ' >/dev/null 2>&1 &
   bridge_pid="$!"
   echo "${bridge_pid}" > "${BRIDGE_PID_FILE}"
   sleep 1
