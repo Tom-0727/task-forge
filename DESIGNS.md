@@ -36,7 +36,7 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
   可复用的 skill 机制（由 Codex / Claude runtime 自动加载）。
 - `mailbox/`
   人类-智能体共享邮箱。`MAILBOX.jsonl` 存放于此。
-- `run.py`
+- `run_claude.py`
   Claude 心跳启动器（Python，基于 `claude-agent-sdk`）。
 - `run_codex.mjs`
   Codex 心跳启动器（Node.js，基于官方 Codex SDK）。
@@ -345,7 +345,7 @@ Memory/
 
 心跳是框架层的编排机制，用于定期决定是否继续在同一个 provider 会话上工作。
 
-Claude 通过 `run.py`（基于 `claude-agent-sdk`）实现。
+Claude 通过 `run_claude.py`（基于 `claude-agent-sdk`）实现。
 Codex 通过 `run_codex.mjs`（基于官方 Codex SDK）实现。
 
 默认间隔：每 20 分钟。

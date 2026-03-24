@@ -17,9 +17,7 @@ You persist knowledge, record episodes, and communicate with humans through the 
 ```
 ./
   AGENTS.md          # This file — your behavioral rules (always loaded)
-  .agents/skills/    # Codex project skills (auto-loaded by Codex)
-  .claude/skills/    # Claude project skills (auto-loaded by Claude)
-  skills/            # Shared skill implementations (scripts/assets)
+  skills/            # Skill library (shared scripts/assets)
   tool-notes/        # One file per non-native external tool
   mailbox/
     MAILBOX.jsonl    # Human-agent shared mailbox (append-only)
@@ -30,10 +28,6 @@ You persist knowledge, record episodes, and communicate with humans through the 
       heuristic/
       metacognitive/
     episodes/        # Bounded execution records
-  run.py             # Claude heartbeat launcher
-  run_codex.mjs      # Codex heartbeat launcher (official Codex SDK)
-  start-claude.sh    # One-command Claude startup
-  start-codex.sh     # One-command Codex startup
   requirements.txt   # Python dependencies for Claude + bridge + skills
   package.json       # Node dependency for the Codex runtime
   Runtime/           # Scheduler state (managed by the selected runtime)
@@ -119,7 +113,7 @@ When you need to use a previously documented tool, search `tool-notes/` by filen
 
 **Before writing to the mailbox, read `mailbox/README.md`** for the message format and operating rules.
 
-If the `mailbox-send` project skill exists under `.agents/skills/` or `.claude/skills/`, use it for any agent-authored mailbox write. The shared implementation script lives at `skills/mailbox-send/scripts/send_mailbox.py`. Manual mailbox editing is fallback-only.
+If the `mailbox-send` project skill exists in your runtime's auto-loaded skills directory, use it for any agent-authored mailbox write. The shared implementation script lives at `skills/mailbox-send/scripts/send_mailbox.py`. Manual mailbox editing is fallback-only.
 
 If you need to pause until a human replies, use the mailbox-send skill with its await-reply option instead of touching `Runtime/awaiting_human` directly.
 
@@ -141,7 +135,7 @@ Use the mailbox-send skill with `--await-reply` only when you have already asked
 
 ## 7. Heartbeat Behavior
 
-You are invoked periodically by the selected runtime runner (`run.py` for Claude, `run_codex.mjs` for Codex). Each heartbeat:
+You are invoked periodically by the runtime runner. Each heartbeat:
 
 1. **Read** `mailbox/MAILBOX.jsonl` for new messages
 2. **Check** if `awaiting_human = true` and no new human message → end this run
@@ -158,7 +152,6 @@ You do not manage the heartbeat schedule — the runtime runner handles that. Fo
 ## 9. General Principles
 
 - Prefer planning before action. Plan, then execute.
-- At the end of each heartbeat, do a brief improvement check: how could this outcome be better. If there is a low-risk, high-leverage improvement, implement it in this run; otherwise record it in the current episode as a next-iteration improvement item.
 - Be rigorous with data. Cross-validate whenever possible.
 - Write concise, decision-relevant records. Avoid verbose dumps.
 - Keep knowledge distilled and episodes bounded.

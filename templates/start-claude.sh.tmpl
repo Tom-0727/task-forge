@@ -114,7 +114,7 @@ fi
 
 start_bridge_if_configured
 
-nohup uv run --python "${PYTHON_BIN}" "${AGENT_DIR}/run.py" "$@" >"${RUNNER_LOG}" 2>&1 &
+nohup uv run --python "${PYTHON_BIN}" "${AGENT_DIR}/run_claude.py" "$@" >"${RUNNER_LOG}" 2>&1 &
 launcher_pid="$!"
 
 for _ in $(seq 1 20); do
