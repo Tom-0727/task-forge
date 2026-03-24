@@ -36,6 +36,7 @@ Legacy combined example:
     --feishu-chat-id oc_xxx
 
 Optional:
+  --agent-name "ResearchBot"
   --goal-file /path/to/goal.txt
   --allowed-user-ids open_id_1,open_id_2
 EOF
@@ -47,12 +48,14 @@ PROVIDER=""
 INTERACTION=""
 INTERVAL=""
 WORKDIR=""
+AGENT_NAME=""
 FEISHU_APP_ID=""
 FEISHU_APP_SECRET=""
 FEISHU_CHAT_ID=""
 ALLOWED_USER_IDS=""
 WEB_UI_HOST="127.0.0.1"
 WEB_UI_PORT="8080"
+RUNTIME_AGENT_NAME=""
 
 resolve_path() {
   python3 - "$1" <<'PY'
@@ -71,6 +74,56 @@ derive_agent_name() {
     name="task-forge-agent"
   fi
   echo "$name"
+}
+
+infer_agent_name_from_agents_md() {
+  local agents_file="$1/AGENTS.md"
+  local first_line
+  local name
+
+  if [[ ! -f "${agents_file}" ]]; then
+    return 1
+  fi
+
+  IFS= read -r first_line < "${agents_file}" || true
+  if [[ "${first_line}" != \#* ]]; then
+    return 1
+  fi
+
+  name="${first_line#\# }"
+  name="${name% — Agent Behavioral Rules}"
+  name="${name% - Agent Behavioral Rules}"
+  if [[ -z "${name//[[:space:]]/}" ]]; then
+    return 1
+  fi
+
+  echo "${name}"
+}
+
+resolve_runtime_agent_name() {
+  local runtime_name_file="${WORKDIR}/Runtime/agent_name"
+  local name
+
+  if [[ -f "${runtime_name_file}" ]]; then
+    name="$(tr -d '\r' < "${runtime_name_file}")"
+    if [[ -n "${name//[[:space:]]/}" ]]; then
+      echo "${name}"
+      return
+    fi
+  fi
+
+  if name="$(infer_agent_name_from_agents_md "${WORKDIR}")"; then
+    echo "${name}"
+    return
+  fi
+
+  echo "$(derive_agent_name "${WORKDIR}")"
+}
+
+write_runtime_agent_name() {
+  local name="$1"
+  mkdir -p "${WORKDIR}/Runtime"
+  printf '%s\n' "${name}" > "${WORKDIR}/Runtime/agent_name"
 }
 
 is_task_forge_workspace() {
@@ -101,8 +154,13 @@ write_interaction_mode() {
 ensure_workspace() {
   if [[ ! -e "${WORKDIR}" ]]; then
     local agent_name
-    agent_name="$(derive_agent_name "${WORKDIR}")"
+    agent_name="${AGENT_NAME}"
+    if [[ -z "${agent_name//[[:space:]]/}" ]]; then
+      agent_name="$(derive_agent_name "${WORKDIR}")"
+    fi
     "${CREATE_AGENT}" "${WORKDIR}" "${agent_name}" >/dev/null
+    RUNTIME_AGENT_NAME="${agent_name}"
+    write_runtime_agent_name "${RUNTIME_AGENT_NAME}"
     return
   fi
 
@@ -110,6 +168,12 @@ ensure_workspace() {
     echo "Error: ${WORKDIR} exists but is not a task-forge workspace."
     exit 1
   fi
+
+  if [[ -n "${AGENT_NAME//[[:space:]]/}" ]]; then
+    echo "Warning: --agent-name is ignored because workspace already exists."
+  fi
+  RUNTIME_AGENT_NAME="$(resolve_runtime_agent_name)"
+  write_runtime_agent_name "${RUNTIME_AGENT_NAME}"
 }
 
 ensure_python_deps() {
@@ -260,6 +324,10 @@ while [[ $# -gt 0 ]]; do
       WORKDIR="$2"
       shift 2
       ;;
+    --agent-name)
+      AGENT_NAME="$2"
+      shift 2
+      ;;
     --feishu-app-id)
       FEISHU_APP_ID="$2"
       shift 2
@@ -329,6 +397,11 @@ if [[ -z "${WORKDIR}" ]]; then
   exit 1
 fi
 
+if [[ -n "${AGENT_NAME}" && -z "${AGENT_NAME//[[:space:]]/}" ]]; then
+  echo "Error: --agent-name cannot be empty."
+  exit 1
+fi
+
 if [[ "${INTERACTION}" == "feishu" ]]; then
   if [[ -z "${FEISHU_APP_ID}" || -z "${FEISHU_APP_SECRET}" || -z "${FEISHU_CHAT_ID}" ]]; then
     echo "Error: Feishu mode requires --feishu-app-id, --feishu-app-secret, --feishu-chat-id."
@@ -385,6 +458,7 @@ ensure_started
 
 echo "Runtime ready"
 echo "Workdir: ${WORKDIR}"
+echo "Agent name: ${RUNTIME_AGENT_NAME}"
 echo "Provider: ${PROVIDER}"
 echo "Interaction: ${INTERACTION}"
 echo "Interval: ${INTERVAL}"
