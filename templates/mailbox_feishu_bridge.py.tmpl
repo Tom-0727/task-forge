@@ -13,8 +13,11 @@ from pathlib import Path
 import lark_oapi as lark
 from dotenv import load_dotenv
 from lark_oapi.api.im.v1 import (
+    CreateMessageReactionRequest,
+    CreateMessageReactionRequestBody,
     CreateMessageRequest,
     CreateMessageRequestBody,
+    Emoji,
     P2ImMessageMessageReadV1,
     P2ImMessageReceiveV1,
 )
@@ -29,6 +32,7 @@ RUNTIME_DIR = AGENT_DIR / "Runtime"
 STATE_FILE = RUNTIME_DIR / "bridge-state.json"
 PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
 STATE_LOCK = threading.Lock()
+client: lark.Client | None = None
 
 # ─── Environment ──────────────────────────────────────────────────────
 
@@ -38,6 +42,7 @@ load_dotenv(dotenv_path=AGENT_DIR / "mailbox_bridge.env", override=False)
 APP_ID = os.environ["FEISHU_APP_ID"]
 APP_SECRET = os.environ["FEISHU_APP_SECRET"]
 CONFIGURED_CHAT_ID = os.getenv("FEISHU_CHAT_ID", "").strip()
+INBOUND_ACK_EMOJI = os.getenv("FEISHU_INBOUND_ACK_EMOJI", "OK").strip()
 OUTBOUND_TASK_PREFIX = os.getenv("FEISHU_OUTBOUND_TASK_PREFIX", "1").strip().lower() not in {
     "0",
     "false",
@@ -173,6 +178,32 @@ def send_text(client: lark.Client, chat_id: str, text: str) -> None:
         raise RuntimeError(f"[send_text] error {resp.code}: {resp.msg}")
 
 
+def send_reaction(client: lark.Client, message_id: str, emoji_type: str) -> None:
+    req = (
+        CreateMessageReactionRequest.builder()
+        .message_id(message_id)
+        .request_body(
+            CreateMessageReactionRequestBody.builder()
+            .reaction_type(Emoji.builder().emoji_type(emoji_type).build())
+            .build()
+        )
+        .build()
+    )
+    resp = client.im.v1.message_reaction.create(req)
+    if not resp.success():
+        raise RuntimeError(f"[send_reaction] error {resp.code}: {resp.msg}")
+
+
+def try_send_inbound_ack(message_id: str) -> None:
+    if client is None or not INBOUND_ACK_EMOJI:
+        return
+
+    try:
+        send_reaction(client, message_id, INBOUND_ACK_EMOJI)
+    except Exception as exc:
+        log(f"Failed to send inbound ack reaction {INBOUND_ACK_EMOJI!r} for {message_id}: {exc}")
+
+
 def outbound_worker(client: lark.Client) -> None:
     while True:
         try:
@@ -222,6 +253,8 @@ def on_message(data: P2ImMessageReceiveV1) -> None:
     if msg.message_id in recent_ids or mailbox_contains_field(MAILBOX, "feishu_message_id", msg.message_id):
         return
 
+    try_send_inbound_ack(msg.message_id)
+
     entry = append_message(
         MAILBOX,
         role="human",
@@ -250,6 +283,7 @@ def on_message_read(_: P2ImMessageMessageReadV1) -> None:
 def main() -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 
+    global client
     client = lark.Client.builder().app_id(APP_ID).app_secret(APP_SECRET).build()
 
     threading.Thread(target=outbound_worker, args=(client,), daemon=True).start()
