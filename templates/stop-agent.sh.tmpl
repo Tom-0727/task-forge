@@ -6,6 +6,7 @@ AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUNTIME_DIR="${AGENT_DIR}/Runtime"
 RUNNER_PID_FILE="${RUNTIME_DIR}/pid"
 BRIDGE_PID_FILE="${RUNTIME_DIR}/bridge.pid"
+WEB_UI_PID_FILE="${RUNTIME_DIR}/web_ui.pid"
 PROVIDER_FILE="${RUNTIME_DIR}/runtime_provider"
 
 is_running() {
@@ -57,6 +58,7 @@ stop_pid_file() {
 
 stop_pid_file "runtime" "$RUNNER_PID_FILE"
 stop_pid_file "Feishu bridge" "$BRIDGE_PID_FILE"
+stop_pid_file "Web UI" "$WEB_UI_PID_FILE"
 
 rm -f "$PROVIDER_FILE"
 

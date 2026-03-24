@@ -11,6 +11,24 @@ Usage:
   ./bootstrap-runtime \
     --goal "Goal text" \
     --provider codex|claude \
+    --interaction feishu|web-ui \
+    --interval 20 \
+    --workdir /abs/path/to/runtime
+
+Feishu mode only:
+  --feishu-app-id xxx \
+  --feishu-app-secret yyy \
+  --feishu-chat-id oc_xxx
+
+Web UI mode only:
+  --web-ui-host 127.0.0.1 \
+  --web-ui-port 8080
+
+Legacy combined example:
+  ./bootstrap-runtime \
+    --goal "Goal text" \
+    --provider codex \
+    --interaction feishu \
     --interval 20 \
     --workdir /abs/path/to/runtime \
     --feishu-app-id xxx \
@@ -26,12 +44,15 @@ EOF
 GOAL=""
 GOAL_FILE=""
 PROVIDER=""
+INTERACTION=""
 INTERVAL=""
 WORKDIR=""
 FEISHU_APP_ID=""
 FEISHU_APP_SECRET=""
 FEISHU_CHAT_ID=""
 ALLOWED_USER_IDS=""
+WEB_UI_HOST="127.0.0.1"
+WEB_UI_PORT="8080"
 
 resolve_path() {
   python3 - "$1" <<'PY'
@@ -70,6 +91,11 @@ ALLOWED_USER_IDS=${ALLOWED_USER_IDS}
 FEISHU_OUTBOUND_TASK_PREFIX=0
 FEISHU_MAILBOX_POLL_INTERVAL=1
 EOF
+}
+
+write_interaction_mode() {
+  mkdir -p "${WORKDIR}/Runtime"
+  printf '%s\n' "${INTERACTION}" > "${WORKDIR}/Runtime/interaction_mode"
 }
 
 ensure_workspace() {
@@ -157,9 +183,11 @@ is_running() {
 ensure_started() {
   local runner_pid
   local bridge_pid
+  local web_ui_pid
 
   runner_pid="$(read_pid_file "${WORKDIR}/Runtime/pid")"
   bridge_pid="$(read_pid_file "${WORKDIR}/Runtime/bridge.pid")"
+  web_ui_pid="$(read_pid_file "${WORKDIR}/Runtime/web_ui.pid")"
 
   if [[ -z "${runner_pid}" ]] || ! is_running "${runner_pid}"; then
     echo "Error: runtime failed to stay up."
@@ -167,11 +195,43 @@ ensure_started() {
     exit 1
   fi
 
-  if [[ -z "${bridge_pid}" ]] || ! is_running "${bridge_pid}"; then
-    echo "Error: Feishu bridge failed to stay up."
-    echo "Check: ${WORKDIR}/Runtime/mailbox-feishu-bridge.log"
+  if [[ "${INTERACTION}" == "feishu" ]]; then
+    if [[ -z "${bridge_pid}" ]] || ! is_running "${bridge_pid}"; then
+      echo "Error: Feishu bridge failed to stay up."
+      echo "Check: ${WORKDIR}/Runtime/mailbox-feishu-bridge.log"
+      exit 1
+    fi
+  else
+    if [[ -z "${web_ui_pid}" ]] || ! is_running "${web_ui_pid}"; then
+      echo "Error: Web UI failed to stay up."
+      echo "Check: ${WORKDIR}/Runtime/web-ui.log"
+      exit 1
+    fi
+  fi
+}
+
+start_web_ui() {
+  local web_ui_pid
+  local web_ui_pid_file="${WORKDIR}/Runtime/web_ui.pid"
+  local web_ui_log="${WORKDIR}/Runtime/web-ui.log"
+  local python_bin="${WORKDIR}/.venv/bin/python"
+  local web_ui_script="${WORKDIR}/web_ui_server.py"
+
+  if [[ ! -f "${web_ui_script}" ]]; then
+    echo "Error: ${web_ui_script} is missing in this workspace."
+    echo "Recreate workspace with the latest create-agent template."
     exit 1
   fi
+
+  web_ui_pid="$(read_pid_file "${web_ui_pid_file}")"
+  if [[ -n "${web_ui_pid}" ]] && is_running "${web_ui_pid}"; then
+    return
+  fi
+
+  rm -f "${web_ui_pid_file}"
+  nohup "${python_bin}" "${web_ui_script}" --host "${WEB_UI_HOST}" --port "${WEB_UI_PORT}" >"${web_ui_log}" 2>&1 &
+  web_ui_pid="$!"
+  echo "${web_ui_pid}" > "${web_ui_pid_file}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -186,6 +246,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --provider)
       PROVIDER="$2"
+      shift 2
+      ;;
+    --interaction)
+      INTERACTION="$2"
       shift 2
       ;;
     --interval)
@@ -210,6 +274,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --allowed-user-ids)
       ALLOWED_USER_IDS="$2"
+      shift 2
+      ;;
+    --web-ui-host)
+      WEB_UI_HOST="$2"
+      shift 2
+      ;;
+    --web-ui-port)
+      WEB_UI_PORT="$2"
       shift 2
       ;;
     --help|-h)
@@ -242,6 +314,11 @@ if [[ "${PROVIDER}" != "codex" && "${PROVIDER}" != "claude" ]]; then
   exit 1
 fi
 
+if [[ "${INTERACTION}" != "feishu" && "${INTERACTION}" != "web-ui" ]]; then
+  echo "Error: --interaction must be feishu or web-ui."
+  exit 1
+fi
+
 if ! [[ "${INTERVAL}" =~ ^[0-9]+$ ]]; then
   echo "Error: --interval must be a non-negative integer."
   exit 1
@@ -252,15 +329,30 @@ if [[ -z "${WORKDIR}" ]]; then
   exit 1
 fi
 
-if [[ -z "${FEISHU_APP_ID}" || -z "${FEISHU_APP_SECRET}" || -z "${FEISHU_CHAT_ID}" ]]; then
-  echo "Error: Feishu config is required: --feishu-app-id, --feishu-app-secret, --feishu-chat-id."
+if [[ "${INTERACTION}" == "feishu" ]]; then
+  if [[ -z "${FEISHU_APP_ID}" || -z "${FEISHU_APP_SECRET}" || -z "${FEISHU_CHAT_ID}" ]]; then
+    echo "Error: Feishu mode requires --feishu-app-id, --feishu-app-secret, --feishu-chat-id."
+    exit 1
+  fi
+else
+  if [[ -n "${FEISHU_APP_ID}" || -n "${FEISHU_APP_SECRET}" || -n "${FEISHU_CHAT_ID}" || -n "${ALLOWED_USER_IDS}" ]]; then
+    echo "Error: Web UI mode must not include Feishu arguments."
+    exit 1
+  fi
+fi
+
+if ! [[ "${WEB_UI_PORT}" =~ ^[0-9]+$ ]] || [[ "${WEB_UI_PORT}" -le 0 ]] || [[ "${WEB_UI_PORT}" -gt 65535 ]]; then
+  echo "Error: --web-ui-port must be an integer between 1 and 65535."
   exit 1
 fi
 
 WORKDIR="$(resolve_path "${WORKDIR}")"
 
 ensure_workspace
-write_feishu_env
+if [[ "${INTERACTION}" == "feishu" ]]; then
+  write_feishu_env
+fi
+write_interaction_mode
 ensure_python_deps
 ensure_node_deps
 
@@ -270,11 +362,23 @@ GOAL_STATUS="$(seed_initial_goal)"
   cd "${WORKDIR}"
   ./stop-agent.sh >/dev/null 2>&1 || true
   if [[ "${PROVIDER}" == "codex" ]]; then
-    ./start-codex.sh --interval "${INTERVAL}" >/dev/null
+    if [[ "${INTERACTION}" == "web-ui" ]]; then
+      TASK_FORGE_SKIP_BRIDGE=1 ./start-codex.sh --interval "${INTERVAL}" >/dev/null
+    else
+      ./start-codex.sh --interval "${INTERVAL}" >/dev/null
+    fi
   else
-    ./start-claude.sh --interval "${INTERVAL}" >/dev/null
+    if [[ "${INTERACTION}" == "web-ui" ]]; then
+      TASK_FORGE_SKIP_BRIDGE=1 ./start-claude.sh --interval "${INTERVAL}" >/dev/null
+    else
+      ./start-claude.sh --interval "${INTERVAL}" >/dev/null
+    fi
   fi
 )
+
+if [[ "${INTERACTION}" == "web-ui" ]]; then
+  start_web_ui
+fi
 
 sleep 2
 ensure_started
@@ -282,7 +386,13 @@ ensure_started
 echo "Runtime ready"
 echo "Workdir: ${WORKDIR}"
 echo "Provider: ${PROVIDER}"
+echo "Interaction: ${INTERACTION}"
 echo "Interval: ${INTERVAL}"
 echo "Goal seeded: ${GOAL_STATUS}"
 echo "Runner PID: $(read_pid_file "${WORKDIR}/Runtime/pid")"
-echo "Bridge PID: $(read_pid_file "${WORKDIR}/Runtime/bridge.pid")"
+if [[ "${INTERACTION}" == "feishu" ]]; then
+  echo "Bridge PID: $(read_pid_file "${WORKDIR}/Runtime/bridge.pid")"
+else
+  echo "Web UI PID: $(read_pid_file "${WORKDIR}/Runtime/web_ui.pid")"
+  echo "Web UI URL: http://${WEB_UI_HOST}:${WEB_UI_PORT}"
+fi

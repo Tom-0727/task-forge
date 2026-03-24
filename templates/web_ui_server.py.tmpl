@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""Simple Web UI for mailbox history, status, and human input."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from mailbox_io import append_message, read_messages
+
+AGENT_DIR = Path(__file__).resolve().parent
+MAILBOX = AGENT_DIR / "mailbox" / "MAILBOX.jsonl"
+RUNTIME_DIR = AGENT_DIR / "Runtime"
+PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
+RUNNER_PID_FILE = RUNTIME_DIR / "pid"
+BRIDGE_PID_FILE = RUNTIME_DIR / "bridge.pid"
+WEB_UI_PID_FILE = RUNTIME_DIR / "web_ui.pid"
+PROVIDER_FILE = RUNTIME_DIR / "runtime_provider"
+STATE_FILE = RUNTIME_DIR / "state"
+HEARTBEAT_FILE = RUNTIME_DIR / "last_heartbeat"
+AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
+MANUAL_PAUSE_FILE = RUNTIME_DIR / "manual_pause.json"
+INTERACTION_MODE_FILE = RUNTIME_DIR / "interaction_mode"
+
+
+def read_text(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def format_ts(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return "none"
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return text.replace("T", " ").replace("Z", "").strip()
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def pid_status(path: Path) -> dict:
+    raw = read_text(path)
+    if not raw:
+        return {"state": "stopped", "pid": ""}
+    try:
+        pid = int(raw)
+    except Exception:
+        return {"state": "stale", "pid": raw}
+    if is_running(pid):
+        return {"state": "running", "pid": str(pid)}
+    return {"state": "stale", "pid": str(pid)}
+
+
+def status_payload() -> dict:
+    heartbeat = read_text(HEARTBEAT_FILE)
+    return {
+        "agent": "{{AGENT_NAME}}",
+        "interaction_mode": read_text(INTERACTION_MODE_FILE) or "unknown",
+        "provider": read_text(PROVIDER_FILE) or "none",
+        "runtime_state": read_text(STATE_FILE) or "unknown",
+        "runner": pid_status(RUNNER_PID_FILE),
+        "bridge": pid_status(BRIDGE_PID_FILE),
+        "web_ui": pid_status(WEB_UI_PID_FILE),
+        "last_heartbeat": format_ts(heartbeat) if heartbeat else "none",
+        "awaiting_human": AWAITING_FILE.exists(),
+        "manual_pause": MANUAL_PAUSE_FILE.exists(),
+    }
+
+
+def history_payload(limit: int) -> list[dict]:
+    messages = read_messages(MAILBOX)
+    rendered: list[dict] = []
+    for message in messages[-limit:]:
+        rendered.append(
+            {
+                "id": str(message.get("id", "")),
+                "ts": format_ts(str(message.get("ts", ""))),
+                "role": str(message.get("role", "")),
+                "task_id": str(message.get("task_id", "")),
+                "message": str(message.get("message", "")),
+            }
+        )
+    return rendered
+
+
+def write_pending_human(entry: dict) -> None:
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "mailbox_id": entry["id"],
+        "ts": entry["ts"],
+        "source": "web-ui",
+    }
+    PENDING_HUMAN_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+HTML = """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{AGENT_NAME}} Web UI</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; max-width: 960px; }
+    h1 { margin: 0 0 12px; }
+    .row { margin: 10px 0; }
+    .panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin: 12px 0; }
+    .history { max-height: 55vh; overflow: auto; white-space: pre-wrap; background: #fafafa; }
+    .msg { border-bottom: 1px solid #eee; padding: 8px 0; }
+    textarea { width: 100%; min-height: 100px; }
+    button { padding: 8px 14px; }
+    .meta { color: #666; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>{{AGENT_NAME}} Web UI</h1>
+  <div class="row">
+    <button onclick="refreshAll()">Refresh</button>
+  </div>
+  <div class="panel">
+    <h3>Status</h3>
+    <pre id="status"></pre>
+  </div>
+  <div class="panel">
+    <h3>Send Human Message</h3>
+    <textarea id="message" placeholder="Type message"></textarea>
+    <div class="row">
+      <button onclick="sendMessage()">Send</button>
+      <span id="sendResult" class="meta"></span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>Mailbox History</h3>
+    <div id="history" class="history"></div>
+  </div>
+<script>
+async function loadStatus() {
+  const resp = await fetch('/api/status');
+  const data = await resp.json();
+  document.getElementById('status').textContent = JSON.stringify(data, null, 2);
+}
+
+async function loadHistory() {
+  const resp = await fetch('/api/history?limit=50');
+  const data = await resp.json();
+  const root = document.getElementById('history');
+  root.innerHTML = '';
+  for (const item of data.items) {
+    const div = document.createElement('div');
+    div.className = 'msg';
+    div.textContent = `${item.ts}  ${item.role}  ${item.task_id}\\n${item.message}`;
+    root.appendChild(div);
+  }
+}
+
+async function sendMessage() {
+  const text = document.getElementById('message').value;
+  const result = document.getElementById('sendResult');
+  result.textContent = '';
+  const resp = await fetch('/api/send', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({message: text})
+  });
+  const data = await resp.json();
+  if (!resp.ok) {
+    result.textContent = `Error: ${data.error || 'send failed'}`;
+    return;
+  }
+  document.getElementById('message').value = '';
+  result.textContent = `Sent as ${data.id}`;
+  await loadHistory();
+}
+
+async function refreshAll() {
+  await Promise.all([loadStatus(), loadHistory()]);
+}
+
+refreshAll();
+setInterval(loadStatus, 10000);
+setInterval(loadHistory, 8000);
+</script>
+</body>
+</html>
+"""
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args) -> None:
+        return
+
+    def _json(self, payload: dict | list, status_code: int = 200) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _html(self, body: str) -> None:
+        data = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/":
+            self._html(HTML)
+            return
+        if parsed.path == "/api/status":
+            self._json(status_payload())
+            return
+        if parsed.path == "/api/history":
+            query = parse_qs(parsed.query)
+            try:
+                limit = int(query.get("limit", ["50"])[0])
+            except Exception:
+                limit = 50
+            limit = max(1, min(limit, 200))
+            self._json({"items": history_payload(limit)})
+            return
+
+        self._json({"error": "not found"}, 404)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/send":
+            self._json({"error": "not found"}, 404)
+            return
+
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+        except Exception:
+            size = 0
+        raw = self.rfile.read(size) if size > 0 else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except Exception:
+            self._json({"error": "invalid json"}, 400)
+            return
+
+        message = str(payload.get("message", "")).strip()
+        if not message:
+            self._json({"error": "message must not be empty"}, 400)
+            return
+
+        entry = append_message(
+            MAILBOX,
+            role="human",
+            task_id="task.human.reply",
+            message=message,
+            extra={"source": "web-ui"},
+        )
+        write_pending_human(entry)
+        self._json({"ok": True, "id": entry["id"], "ts": entry["ts"]})
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Web UI server for {{AGENT_NAME}}")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8080)
+    args = parser.parse_args()
+
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    print(
+        f"[{utcnow()}] [web-ui] Serving {{AGENT_NAME}} Web UI at http://{args.host}:{args.port}",
+        flush=True,
+    )
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

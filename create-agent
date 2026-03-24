@@ -62,7 +62,8 @@ mkdir -p "${TARGET_DIR}/Memory/knowledge/metacognitive"
 mkdir -p "${TARGET_DIR}/Memory/episodes"
 mkdir -p "${TARGET_DIR}/tool-notes"
 mkdir -p "${TARGET_DIR}/mailbox"
-mkdir -p "${TARGET_DIR}/skills"
+mkdir -p "${TARGET_DIR}/.agents/skills/mailbox-send"
+mkdir -p "${TARGET_DIR}/.claude/skills/mailbox-send"
 mkdir -p "${TARGET_DIR}/skills/mailbox-send/scripts"
 mkdir -p "${TARGET_DIR}/Runtime"
 
@@ -94,6 +95,7 @@ render_template "${TEMPLATE_DIR}/MAILBOX.jsonl.tmpl"         "${TARGET_DIR}/mail
 render_template "${TEMPLATE_DIR}/mailbox_io.py.tmpl"         "${TARGET_DIR}/mailbox_io.py"
 render_template "${TEMPLATE_DIR}/mailbox_feishu_bridge.py.tmpl" \
                                                           "${TARGET_DIR}/mailbox_feishu_bridge.py"
+render_template "${TEMPLATE_DIR}/web_ui_server.py.tmpl"      "${TARGET_DIR}/web_ui_server.py"
 render_template "${TEMPLATE_DIR}/mailbox_bridge.env.example.tmpl" \
                                                           "${TARGET_DIR}/mailbox_bridge.env.example"
 render_template "${TEMPLATE_DIR}/start-claude.sh.tmpl"       "${TARGET_DIR}/start-claude.sh"
@@ -101,12 +103,15 @@ render_template "${TEMPLATE_DIR}/start-codex.sh.tmpl"        "${TARGET_DIR}/star
 render_template "${TEMPLATE_DIR}/stop-agent.sh.tmpl"         "${TARGET_DIR}/stop-agent.sh"
 render_template "${TEMPLATE_DIR}/status-agent.sh.tmpl"       "${TARGET_DIR}/status-agent.sh"
 render_template "${TEMPLATE_DIR}/skills/mailbox-send/SKILL.md.tmpl" \
-                                                          "${TARGET_DIR}/skills/mailbox-send/SKILL.md"
+                                                          "${TARGET_DIR}/.agents/skills/mailbox-send/SKILL.md"
+render_template "${TEMPLATE_DIR}/skills/mailbox-send/SKILL.md.tmpl" \
+                                                          "${TARGET_DIR}/.claude/skills/mailbox-send/SKILL.md"
 render_template "${TEMPLATE_DIR}/skills/mailbox-send/scripts/send_mailbox.py.tmpl" \
                                                           "${TARGET_DIR}/skills/mailbox-send/scripts/send_mailbox.py"
 
 chmod +x "${TARGET_DIR}/run.py"
 chmod +x "${TARGET_DIR}/run_codex.mjs"
+chmod +x "${TARGET_DIR}/web_ui_server.py"
 chmod +x "${TARGET_DIR}/start-claude.sh"
 chmod +x "${TARGET_DIR}/start-codex.sh"
 chmod +x "${TARGET_DIR}/stop-agent.sh"
