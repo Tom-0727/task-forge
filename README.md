@@ -15,52 +15,69 @@ One command creates workspace, installs deps, seeds goal, and starts runtime.
   --agent-name "ResearchBot" \
   --provider codex \
   --interaction web-ui \
+  --web-ui-port 8080 \
   --interval 20 \
   --workdir ~/agents/researcher
 ```
 
 Then open `http://127.0.0.1:8080`.
 
+## Template Layout
+
+Templates are split by ownership at the repository root:
+
+- `shared/` — provider-agnostic templates (mailbox, memory, bridge, web-ui, common skills, rules body)
+- `providers/codex/` — Codex runtime templates
+- `providers/claude/` — Claude runtime templates
+
+`bootstrap-runtime` is now the only scaffolding entrypoint; `create-agent` has been removed.
+
 ## What Gets Created
 
-```
+`bootstrap-runtime --provider codex` creates a Codex workspace.  
+`bootstrap-runtime --provider claude` creates a Claude workspace.
+
+Common files in both:
+
+```text
 <target-dir>/
-  AGENTS.md          # Behavioral rules (always loaded by the agent)
-  .agents/skills/    # Codex project skills
-  .claude/skills/    # Claude project skills
   skills/            # Shared skill implementations
-  run_claude.py      # Claude heartbeat launcher
-  run_codex.mjs      # Codex heartbeat launcher (official Codex SDK)
-  start-claude.sh    # One-command Claude startup
-  start-codex.sh     # One-command Codex startup
-  stop-agent.sh      # Stop the active runtime + bridge
+  stop-agent.sh      # Stop active runtime + bridge + web UI
   status-agent.sh    # Inspect runtime state
-  requirements.txt   # Python dependencies for Claude + bridge + skills
-  package.json       # Node dependency for the Codex runtime
+  requirements.txt   # Python deps (shared + provider-specific)
   tool-notes/        # One file per non-native external tool
   mailbox/
     MAILBOX.jsonl    # Human-agent communication (append-only)
   Memory/
-    knowledge/       # Distilled long-term knowledge
-      factual/
-      conceptual/
-      heuristic/
-      metacognitive/
-    episodes/        # Bounded execution records
-  Runtime/           # Scheduler state (session ID, PID, heartbeat)
+    knowledge/
+    episodes/
+  Runtime/
 ```
 
-Generated workspaces now also include:
+Codex-specific files:
+
+- `AGENTS.md`
+- `.agents/skills/mailbox-operate/`
+- `run_codex.mjs`
+- `start-codex.sh`
+- `package.json`
+
+Claude-specific files:
+
+- `CLAUDE.md`
+- `.claude/skills/mailbox-operate/`
+- `run_claude.py`
+- `start-claude.sh`
+
+Also included:
 
 - `mailbox_io.py` — shared append-only mailbox helper
 - `mailbox_feishu_bridge.py` — optional Feishu <-> mailbox bridge
 - `web_ui_server.py` — optional browser-based mailbox/status UI
-- `.agents/skills/mailbox-operate/` — Codex project skill entrypoint + scripts
-- `.claude/skills/mailbox-operate/` — Claude project skill entrypoint + scripts
 - `skills/mailbox-operate/scripts/` — shared mailbox-operate scripts
 - `mailbox_bridge.env.example` — bridge environment template
 
-If `mailbox_bridge.env` exists, the generated runner scripts invoked by `bootstrap-runtime` will start the Feishu bridge automatically.
+If `mailbox_bridge.env` exists, generated runner scripts invoked by `bootstrap-runtime` will start the Feishu bridge automatically.
 
 ## Bootstrap Runtime
 
@@ -71,7 +88,7 @@ It requires an explicit interaction mode:
 ./bootstrap-runtime \
   --goal "Goal text" \
   --agent-name "ResearchBot" \
-  --provider codex \
+  --provider codex|claude \
   --interaction feishu|web-ui \
   --interval 20 \
   --workdir /abs/path/to/runtime
@@ -87,18 +104,18 @@ Rules:
 
 ## Requirements
 
-- Node.js 18+
-- Python 3.10+ and `uv` for the Claude runtime and optional Feishu bridge
-- `claude` CLI installed and configured for the Claude runtime
-- Codex authentication available for the Codex runtime, either via ChatGPT sign-in or API key sign-in
+- Node.js 18+ for Codex runtime
+- Python 3.10+ and `uv` for shared services and Claude runtime
+- `claude` CLI installed and configured for Claude runtime
+- Codex authentication available for Codex runtime, either via ChatGPT sign-in or API key sign-in
 
 ## Design
 
 - **Single bootstrap deployment entrypoint** — create/start via `bootstrap-runtime`
+- **Provider-separated templates** — `shared/` + `providers/<provider>/`
 - **Provider-specific launchers managed internally** — bootstrap orchestrates workspace runner scripts
 - **Codex runtime on the official Codex SDK** — same auth model as Codex CLI, resumable threads, streamed events
-- **Dual-compatible project skills** — Codex loads `.agents/skills`, Claude loads `.claude/skills`, both share the same implementation script
-- **Templates as separate files** — easier to maintain than embedded strings
+- **Dual project skill roots with shared scripts** — Codex loads `.agents/skills`, Claude loads `.claude/skills`, both can call `skills/mailbox-operate/scripts`
 - **Heartbeat in provider-specific runners, not in the agent** — agent does work, launcher handles scheduling
 - **Session resumption across heartbeats** — Claude resumes via `session_id`, Codex resumes via `thread_id`
 - **Append-only mailbox** — simple, auditable human-agent communication

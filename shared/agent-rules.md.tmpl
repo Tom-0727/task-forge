@@ -18,7 +18,7 @@ You persist knowledge, record episodes, make skills and communicate with humans 
 
 ```
 ./
-  AGENTS.md          # This file — your behavioral rules (always loaded)
+  {{RULES_FILENAME}} # This file — your behavioral rules (always loaded)
   skills/            # Skill library (shared scripts/assets)
   tool-notes/        # One file per non-native external tool
   mailbox/
@@ -30,8 +30,8 @@ You persist knowledge, record episodes, make skills and communicate with humans 
       heuristic/
       metacognitive/
     episodes/        # Bounded execution records
-  requirements.txt   # Python dependencies for Claude + bridge + skills
-  package.json       # Node dependency for the Codex runtime
+  requirements.txt   # Python dependencies for runtime + bridge + skills
+  package.json       # Optional Node dependency for the Codex runtime
   Runtime/           # Scheduler state (managed by the selected runtime)
 ```
 
@@ -47,7 +47,7 @@ You persist knowledge, record episodes, make skills and communicate with humans 
 ### 3.2 What does NOT belong here
 
 - Raw task logs → `Memory/episodes/`
-- Stable global behavior rules → `AGENTS.md`
+- Stable global behavior rules → `{{RULES_FILENAME}}`
 - External tool usage procedures → `tool-notes/`
 
 ### 3.3 Creating and updating knowledge

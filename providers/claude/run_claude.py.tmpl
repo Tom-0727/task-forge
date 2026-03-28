@@ -210,7 +210,7 @@ def build_prompt(first_heartbeat: bool, pending_human: dict | None) -> str:
     if first_heartbeat:
         return (
             "You are {{AGENT_NAME}}. This is your first heartbeat.\n\n"
-            "Read AGENTS.md to understand your behavioral rules.\n"
+            "Read CLAUDE.md to understand your behavioral rules.\n"
             "Read mailbox/MAILBOX.jsonl for any initial instructions.\n"
             "Use mailbox-operate/mailbox-read to read mailbox updates and mailbox-send for agent-authored mailbox messages.\n"
             "If you need to pause for a human reply, use mailbox-send with its await-reply option.\n"

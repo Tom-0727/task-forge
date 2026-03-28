@@ -1,3 +1,13 @@
+# 项目目标
+- 打造具有持续学习能力，LifeLong Running 的 Agent 机制的 Harness
+
+# References
+- Claude Python SDK Doc：https://platform.claude.com/docs/en/agent-sdk/python
+- Codex SDK Doc: https://github.com/openai/codex/tree/main/sdk/typescript
+
+# 代码风格
+- 永远不要使用兼容代码，必要时请与用户沟通
+
 # 回复风格
 - Default to concise, high-signal answers.
 - Start with the conclusion in the first sentence.

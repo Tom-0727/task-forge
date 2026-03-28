@@ -3,10 +3,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CREATE_AGENT="${SCRIPT_DIR}/create-agent"
+SHARED_TEMPLATE_DIR="${SCRIPT_DIR}/shared"
+PROVIDER_TEMPLATE_ROOT="${SCRIPT_DIR}/providers"
 
 usage() {
-  cat <<'EOF'
+  cat <<'USAGE'
 Usage:
   ./bootstrap-runtime \
     --goal "Goal text" \
@@ -24,7 +25,7 @@ Web UI mode only:
   --web-ui-host 127.0.0.1 \
   --web-ui-port 8080
 
-Legacy combined example:
+Example:
   ./bootstrap-runtime \
     --goal "Goal text" \
     --provider codex \
@@ -39,7 +40,7 @@ Optional:
   --agent-name "ResearchBot"
   --goal-file /path/to/goal.txt
   --allowed-user-ids open_id_1,open_id_2
-EOF
+USAGE
 }
 
 GOAL=""
@@ -66,6 +67,28 @@ print(Path(sys.argv[1]).expanduser().resolve())
 PY
 }
 
+provider_rules_filename() {
+  case "$1" in
+    codex) echo "AGENTS.md" ;;
+    claude) echo "CLAUDE.md" ;;
+    *)
+      echo "Error: unsupported provider for rules file: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+provider_skill_root() {
+  case "$1" in
+    codex) echo ".agents" ;;
+    claude) echo ".claude" ;;
+    *)
+      echo "Error: unsupported provider for skill root: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
 derive_agent_name() {
   local dir="$1"
   local name
@@ -76,16 +99,16 @@ derive_agent_name() {
   echo "$name"
 }
 
-infer_agent_name_from_agents_md() {
-  local agents_file="$1/AGENTS.md"
+infer_agent_name_from_rules_file() {
+  local rules_file="$1"
   local first_line
   local name
 
-  if [[ ! -f "${agents_file}" ]]; then
+  if [[ ! -f "${rules_file}" ]]; then
     return 1
   fi
 
-  IFS= read -r first_line < "${agents_file}" || true
+  IFS= read -r first_line < "${rules_file}" || true
   if [[ "${first_line}" != \#* ]]; then
     return 1
   fi
@@ -100,6 +123,23 @@ infer_agent_name_from_agents_md() {
   echo "${name}"
 }
 
+infer_agent_name() {
+  local dir="$1"
+  local name
+
+  if name="$(infer_agent_name_from_rules_file "${dir}/AGENTS.md")"; then
+    echo "${name}"
+    return 0
+  fi
+
+  if name="$(infer_agent_name_from_rules_file "${dir}/CLAUDE.md")"; then
+    echo "${name}"
+    return 0
+  fi
+
+  return 1
+}
+
 resolve_runtime_agent_name() {
   local runtime_name_file="${WORKDIR}/Runtime/agent_name"
   local name
@@ -112,7 +152,7 @@ resolve_runtime_agent_name() {
     fi
   fi
 
-  if name="$(infer_agent_name_from_agents_md "${WORKDIR}")"; then
+  if name="$(infer_agent_name "${WORKDIR}")"; then
     echo "${name}"
     return
   fi
@@ -126,24 +166,288 @@ write_runtime_agent_name() {
   printf '%s\n' "${name}" > "${WORKDIR}/Runtime/agent_name"
 }
 
+render_template() {
+  local src="$1"
+  local dst="$2"
+  local agent_name="$3"
+  local goal="$4"
+  local created_at="$5"
+  local created_date="$6"
+  local rules_filename="$7"
+
+  SRC="$src" \
+  DST="$dst" \
+  AGENT_NAME="$agent_name" \
+  GOAL="$goal" \
+  CREATED_AT="$created_at" \
+  CREATED_DATE="$created_date" \
+  RULES_FILENAME="$rules_filename" \
+  python3 - <<'PY'
+from pathlib import Path
+import os
+
+src = Path(os.environ["SRC"])
+dst = Path(os.environ["DST"])
+content = src.read_text()
+
+for key in (
+    "AGENT_NAME",
+    "GOAL",
+    "CREATED_AT",
+    "CREATED_DATE",
+    "RULES_FILENAME",
+):
+    content = content.replace(f"{{{{{key}}}}}", os.environ[key])
+
+dst.parent.mkdir(parents=True, exist_ok=True)
+dst.write_text(content)
+PY
+}
+
+ensure_template_sources() {
+  local provider_template_dir="${PROVIDER_TEMPLATE_ROOT}/${PROVIDER}"
+
+  if [[ ! -d "${SHARED_TEMPLATE_DIR}" ]]; then
+    echo "Error: shared templates directory not found: ${SHARED_TEMPLATE_DIR}"
+    exit 1
+  fi
+
+  if [[ ! -d "${provider_template_dir}" ]]; then
+    echo "Error: provider templates directory not found: ${provider_template_dir}"
+    exit 1
+  fi
+
+  local shared_required=(
+    "agent-rules.md.tmpl"
+    "knowledge-README.md.tmpl"
+    "episodes-README.md.tmpl"
+    "tool-notes-README.md.tmpl"
+    "mailbox-README.md.tmpl"
+    "MAILBOX.jsonl.tmpl"
+    "mailbox_io.py.tmpl"
+    "mailbox_feishu_bridge.py.tmpl"
+    "web_ui_server.py.tmpl"
+    "mailbox_bridge.env.example.tmpl"
+    "stop-agent.sh.tmpl"
+    "status-agent.sh.tmpl"
+    "skills/mailbox-operate/SKILL.md.tmpl"
+    "skills/mailbox-operate/scripts/send_mailbox.py.tmpl"
+    "skills/mailbox-operate/scripts/read_mailbox.py.tmpl"
+  )
+
+  local provider_required=()
+  if [[ "${PROVIDER}" == "codex" ]]; then
+    provider_required=(
+      "run_codex.mjs.tmpl"
+      "start-codex.sh.tmpl"
+      "package.json.tmpl"
+      "requirements.txt.tmpl"
+    )
+  else
+    provider_required=(
+      "run_claude.py.tmpl"
+      "start-claude.sh.tmpl"
+      "requirements.txt.tmpl"
+    )
+  fi
+
+  local rel
+  for rel in "${shared_required[@]}"; do
+    if [[ ! -f "${SHARED_TEMPLATE_DIR}/${rel}" ]]; then
+      echo "Error: missing shared template: ${SHARED_TEMPLATE_DIR}/${rel}"
+      exit 1
+    fi
+  done
+
+  for rel in "${provider_required[@]}"; do
+    if [[ ! -f "${provider_template_dir}/${rel}" ]]; then
+      echo "Error: missing provider template: ${provider_template_dir}/${rel}"
+      exit 1
+    fi
+  done
+}
+
+scaffold_workspace() {
+  local agent_name="$1"
+  local created_at
+  local created_date
+  local rules_filename
+  local provider_template_dir="${PROVIDER_TEMPLATE_ROOT}/${PROVIDER}"
+  local provider_skill_dir
+
+  created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  created_date="$(date -u +%Y%m%dT%H%M%SZ)"
+  rules_filename="$(provider_rules_filename "${PROVIDER}")"
+  provider_skill_dir="$(provider_skill_root "${PROVIDER}")"
+
+  mkdir -p "${WORKDIR}"
+  mkdir -p "${WORKDIR}/Memory/knowledge/factual"
+  mkdir -p "${WORKDIR}/Memory/knowledge/conceptual"
+  mkdir -p "${WORKDIR}/Memory/knowledge/heuristic"
+  mkdir -p "${WORKDIR}/Memory/knowledge/metacognitive"
+  mkdir -p "${WORKDIR}/Memory/episodes"
+  mkdir -p "${WORKDIR}/tool-notes"
+  mkdir -p "${WORKDIR}/mailbox"
+  mkdir -p "${WORKDIR}/skills/mailbox-operate/scripts"
+  mkdir -p "${WORKDIR}/Runtime"
+  mkdir -p "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts"
+
+  render_template "${SHARED_TEMPLATE_DIR}/agent-rules.md.tmpl" \
+    "${WORKDIR}/${rules_filename}" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/knowledge-README.md.tmpl" \
+    "${WORKDIR}/Memory/knowledge/README.md" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/episodes-README.md.tmpl" \
+    "${WORKDIR}/Memory/episodes/README.md" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/tool-notes-README.md.tmpl" \
+    "${WORKDIR}/tool-notes/README.md" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/mailbox-README.md.tmpl" \
+    "${WORKDIR}/mailbox/README.md" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/MAILBOX.jsonl.tmpl" \
+    "${WORKDIR}/mailbox/MAILBOX.jsonl" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/mailbox_io.py.tmpl" \
+    "${WORKDIR}/mailbox_io.py" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/mailbox_feishu_bridge.py.tmpl" \
+    "${WORKDIR}/mailbox_feishu_bridge.py" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/web_ui_server.py.tmpl" \
+    "${WORKDIR}/web_ui_server.py" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/mailbox_bridge.env.example.tmpl" \
+    "${WORKDIR}/mailbox_bridge.env.example" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/stop-agent.sh.tmpl" \
+    "${WORKDIR}/stop-agent.sh" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/status-agent.sh.tmpl" \
+    "${WORKDIR}/status-agent.sh" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/SKILL.md.tmpl" \
+    "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/SKILL.md" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/send_mailbox.py.tmpl" \
+    "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/read_mailbox.py.tmpl" \
+    "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/send_mailbox.py.tmpl" \
+    "${WORKDIR}/skills/mailbox-operate/scripts/send_mailbox.py" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/read_mailbox.py.tmpl" \
+    "${WORKDIR}/skills/mailbox-operate/scripts/read_mailbox.py" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  if [[ "${PROVIDER}" == "codex" ]]; then
+    render_template "${provider_template_dir}/run_codex.mjs.tmpl" \
+      "${WORKDIR}/run_codex.mjs" \
+      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+    render_template "${provider_template_dir}/start-codex.sh.tmpl" \
+      "${WORKDIR}/start-codex.sh" \
+      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+    render_template "${provider_template_dir}/package.json.tmpl" \
+      "${WORKDIR}/package.json" \
+      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+  else
+    render_template "${provider_template_dir}/run_claude.py.tmpl" \
+      "${WORKDIR}/run_claude.py" \
+      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+    render_template "${provider_template_dir}/start-claude.sh.tmpl" \
+      "${WORKDIR}/start-claude.sh" \
+      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+  fi
+
+  render_template "${provider_template_dir}/requirements.txt.tmpl" \
+    "${WORKDIR}/requirements.txt" \
+    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  chmod +x "${WORKDIR}/web_ui_server.py"
+  chmod +x "${WORKDIR}/stop-agent.sh"
+  chmod +x "${WORKDIR}/status-agent.sh"
+  chmod +x "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py"
+  chmod +x "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py"
+  chmod +x "${WORKDIR}/skills/mailbox-operate/scripts/send_mailbox.py"
+  chmod +x "${WORKDIR}/skills/mailbox-operate/scripts/read_mailbox.py"
+
+  if [[ "${PROVIDER}" == "codex" ]]; then
+    chmod +x "${WORKDIR}/run_codex.mjs"
+    chmod +x "${WORKDIR}/start-codex.sh"
+  else
+    chmod +x "${WORKDIR}/run_claude.py"
+    chmod +x "${WORKDIR}/start-claude.sh"
+  fi
+}
+
+is_shared_workspace_layout() {
+  local dir="$1"
+
+  [[ -d "${dir}/mailbox" ]] &&
+  [[ -f "${dir}/mailbox/MAILBOX.jsonl" ]] &&
+  [[ -f "${dir}/mailbox_io.py" ]] &&
+  [[ -f "${dir}/mailbox_feishu_bridge.py" ]] &&
+  [[ -f "${dir}/web_ui_server.py" ]] &&
+  [[ -x "${dir}/stop-agent.sh" ]] &&
+  [[ -x "${dir}/status-agent.sh" ]] &&
+  [[ -d "${dir}/Memory" ]] &&
+  [[ -d "${dir}/tool-notes" ]]
+}
+
+is_provider_workspace_layout() {
+  local dir="$1"
+
+  if [[ "${PROVIDER}" == "codex" ]]; then
+    [[ -f "${dir}/AGENTS.md" ]] &&
+    [[ -f "${dir}/requirements.txt" ]] &&
+    [[ -f "${dir}/package.json" ]] &&
+    [[ -x "${dir}/start-codex.sh" ]] &&
+    [[ -x "${dir}/run_codex.mjs" ]]
+  else
+    [[ -f "${dir}/requirements.txt" ]] &&
+    [[ -x "${dir}/start-claude.sh" ]] &&
+    [[ -x "${dir}/run_claude.py" ]] &&
+    ([[ -f "${dir}/CLAUDE.md" ]] || [[ -f "${dir}/AGENTS.md" ]])
+  fi
+}
+
 is_task_forge_workspace() {
   local dir="$1"
-  [[ -f "${dir}/AGENTS.md" ]] &&
-  [[ -f "${dir}/mailbox/MAILBOX.jsonl" ]] &&
-  [[ -x "${dir}/start-codex.sh" ]] &&
-  [[ -x "${dir}/start-claude.sh" ]] &&
-  [[ -f "${dir}/requirements.txt" ]]
+  is_shared_workspace_layout "${dir}" && is_provider_workspace_layout "${dir}"
 }
 
 write_feishu_env() {
-  cat > "${WORKDIR}/mailbox_bridge.env" <<EOF
+  cat > "${WORKDIR}/mailbox_bridge.env" <<EOF_FEISHU
 FEISHU_APP_ID=${FEISHU_APP_ID}
 FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
 FEISHU_CHAT_ID=${FEISHU_CHAT_ID}
 ALLOWED_USER_IDS=${ALLOWED_USER_IDS}
 FEISHU_OUTBOUND_TASK_PREFIX=0
 FEISHU_MAILBOX_POLL_INTERVAL=1
-EOF
+EOF_FEISHU
 }
 
 write_interaction_mode() {
@@ -158,20 +462,22 @@ ensure_workspace() {
     if [[ -z "${agent_name//[[:space:]]/}" ]]; then
       agent_name="$(derive_agent_name "${WORKDIR}")"
     fi
-    "${CREATE_AGENT}" "${WORKDIR}" "${agent_name}" "${GOAL}" >/dev/null
+
+    scaffold_workspace "${agent_name}"
     RUNTIME_AGENT_NAME="${agent_name}"
     write_runtime_agent_name "${RUNTIME_AGENT_NAME}"
     return
   fi
 
   if ! is_task_forge_workspace "${WORKDIR}"; then
-    echo "Error: ${WORKDIR} exists but is not a task-forge workspace."
+    echo "Error: ${WORKDIR} exists but is not a compatible task-forge workspace for provider '${PROVIDER}'."
     exit 1
   fi
 
   if [[ -n "${AGENT_NAME//[[:space:]]/}" ]]; then
     echo "Warning: --agent-name is ignored because workspace already exists."
   fi
+
   RUNTIME_AGENT_NAME="$(resolve_runtime_agent_name)"
   write_runtime_agent_name "${RUNTIME_AGENT_NAME}"
 }
@@ -283,7 +589,7 @@ start_web_ui() {
 
   if [[ ! -f "${web_ui_script}" ]]; then
     echo "Error: ${web_ui_script} is missing in this workspace."
-    echo "Recreate workspace with the latest create-agent template."
+    echo "Recreate workspace with the latest shared/provider templates."
     exit 1
   fi
 
@@ -421,6 +727,7 @@ fi
 
 WORKDIR="$(resolve_path "${WORKDIR}")"
 
+ensure_template_sources
 ensure_workspace
 if [[ "${INTERACTION}" == "feishu" ]]; then
   write_feishu_env
