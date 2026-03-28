@@ -11,13 +11,13 @@ One command creates workspace, installs deps, seeds goal, and starts runtime.
 
 ```bash
 ./bootstrap-runtime \
-  --goal "Research OpenAI Agents SDK examples" \
-  --agent-name "ResearchBot" \
+  --goal "检查自己的所有机制是否正常，核心关注 skills 机制是否有 mailbox-operate 和 skill-creator" \
+  --agent-name "SelfCheckBot" \
   --provider codex \
   --interaction web-ui \
   --web-ui-port 8080 \
-  --interval 20 \
-  --workdir ~/agents/researcher
+  --interval 8 \
+  --workdir ~/agents/self-check-bot
 ```
 
 Then open `http://127.0.0.1:8080`.
