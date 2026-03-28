@@ -237,7 +237,7 @@ async def invoke_agent(prompt: str, max_turns: int, max_budget: float) -> str | 
         cwd=str(AGENT_DIR),
         allowed_tools=[
             "Read", "Write", "Edit", "Bash", "Glob", "Grep",
-            "WebSearch", "WebFetch",
+            "WebSearch", "WebFetch", "Agent",
         ],
         max_turns=max_turns,
         max_budget_usd=max_budget,

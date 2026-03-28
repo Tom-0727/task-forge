@@ -248,6 +248,7 @@ ensure_template_sources() {
       "run_claude.py.tmpl"
       "start-claude.sh.tmpl"
       "requirements.txt.tmpl"
+      "agents/evaluator.md.tmpl"
     )
   fi
 
@@ -291,10 +292,22 @@ scaffold_workspace() {
   mkdir -p "${WORKDIR}/skills/mailbox-operate/scripts"
   mkdir -p "${WORKDIR}/Runtime"
   mkdir -p "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts"
+  mkdir -p "${WORKDIR}/${provider_skill_dir}/agents"
 
   render_template "${SHARED_TEMPLATE_DIR}/agent-rules.md.tmpl" \
     "${WORKDIR}/${rules_filename}" \
     "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+  # Append provider-specific extra rules if the template exists
+  local extra_rules_tmpl="${provider_template_dir}/extra-rules.md.tmpl"
+  if [[ -f "${extra_rules_tmpl}" ]]; then
+    local extra_rules_tmp="${WORKDIR}/${rules_filename}.extra.tmp"
+    render_template "${extra_rules_tmpl}" \
+      "${extra_rules_tmp}" \
+      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+    cat "${extra_rules_tmp}" >> "${WORKDIR}/${rules_filename}"
+    rm -f "${extra_rules_tmp}"
+  fi
 
   render_template "${SHARED_TEMPLATE_DIR}/knowledge-README.md.tmpl" \
     "${WORKDIR}/Memory/knowledge/README.md" \
@@ -380,6 +393,17 @@ scaffold_workspace() {
     render_template "${provider_template_dir}/start-claude.sh.tmpl" \
       "${WORKDIR}/start-claude.sh" \
       "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+
+    if [[ -d "${provider_template_dir}/agents" ]]; then
+      for agent_tmpl in "${provider_template_dir}/agents/"*.md.tmpl; do
+        [[ -f "${agent_tmpl}" ]] || continue
+        local agent_basename
+        agent_basename="$(basename "${agent_tmpl}" .tmpl)"
+        render_template "${agent_tmpl}" \
+          "${WORKDIR}/${provider_skill_dir}/agents/${agent_basename}" \
+          "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+      done
+    fi
   fi
 
   render_template "${provider_template_dir}/requirements.txt.tmpl" \
