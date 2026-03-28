@@ -24,7 +24,7 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
 
 规范文件和文件夹：
 
-- `AGENTS.md`
+- `AGENTS.md / CLAUDE.md`
   稳定的行为规则。仅包含高层行为约束，具体的文件格式规范下沉到各目录的 README.md 中。
 - `tool-notes/`
   部署后发现的非原生外部工具的使用说明。一个工具一个文件。
@@ -45,7 +45,7 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
 
 ### 1.1 规范分层原则
 
-`AGENTS.md` 只描述：什么时候用、什么属于这里、操作规则（创建/更新/归档条件）。
+`AGENTS.md / CLAUDE.md` 只描述：什么时候用、什么属于这里、操作规则（创建/更新/归档条件）。
 
 各目录的 `README.md` 描述：文件命名、frontmatter 格式、正文模板。
 
@@ -75,7 +75,7 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
 - 稳定的全局行为规则
 - 外部工具使用程序
 
-这些分别属于 `Memory/episodes/`、`skills/`、`AGENTS.md` 和 `tool-notes/`。
+这些分别属于 `Memory/episodes/`、`skills/`、`AGENTS.md / CLAUDE.md` 和 `tool-notes/`。
 
 ### 2.2 目录结构
 
@@ -274,13 +274,13 @@ Memory/
 
 `skills/` 存储智能体可以有意识地加载和运行的可复用能力。
 
-技能如何编写不在此处规定。技能由 Codex / Claude runtime 自动加载，无需在 AGENTS.md 中额外说明。
+技能如何编写不在此处规定。技能由 Codex / Claude runtime 自动加载，无需在 AGENTS.md / CLAUDE.md 中额外说明。
 
 ### 4.2 边界
 
 使用以下规则：
 
-- `AGENTS.md`
+- `AGENTS.md / CLAUDE.md`
   始终生效的行为约束和工作风格。
 - `tool-notes/`
   如何使用非原生外部工具。
