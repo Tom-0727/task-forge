@@ -21,7 +21,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, AssistantMessage, query
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, AssistantMessage, RateLimitEvent, query
 
 # ─── Paths ────────────────────────────────────────────────────────────
 
@@ -37,6 +37,8 @@ LEGACY_SESSION_FILE = RUNTIME_DIR / "session_id"
 AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
 PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
 MANUAL_PAUSE_FILE = RUNTIME_DIR / "manual_pause.json"
+RATELIMIT_FILE = RUNTIME_DIR / "ratelimit.json"
+INTERVAL_FILE = RUNTIME_DIR / "interval"
 
 # ─── Globals ──────────────────────────────────────────────────────────
 
@@ -287,6 +289,19 @@ async def invoke_agent(prompt: str, max_turns: int, max_budget: float) -> str | 
     new_session_id = None
 
     async for message in query(prompt=prompt, options=options):
+        if isinstance(message, RateLimitEvent):
+            info = message.rate_limit_info
+            ratelimit = {
+                "ts": utcnow(),
+                "provider": "claude",
+                "status": info.status,
+                "utilization": info.utilization,
+                "resets_at": info.resets_at,
+                "rate_limit_type": info.rate_limit_type,
+            }
+            RATELIMIT_FILE.write_text(json.dumps(ratelimit))
+            log(f"Rate limit: {info.status} ({info.utilization})")
+
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if hasattr(block, "text"):
@@ -313,6 +328,20 @@ async def invoke_agent(prompt: str, max_turns: int, max_budget: float) -> str | 
     return new_session_id
 
 
+# ─── Interval ────────────────────────────────────────────────────────
+
+def get_interval(default: int) -> int:
+    """Read interval from Runtime/interval file, falling back to CLI default."""
+    if INTERVAL_FILE.exists():
+        try:
+            value = int(INTERVAL_FILE.read_text().strip())
+            if value > 0:
+                return value
+        except (ValueError, OSError):
+            pass
+    return default
+
+
 # ─── Main loop ────────────────────────────────────────────────────────
 
 async def main():
@@ -327,6 +356,9 @@ async def main():
 
     check_and_write_pid()
 
+    # Write initial interval to file so platform can read/modify it
+    INTERVAL_FILE.write_text(str(args.interval))
+
     print("============================================================")
     print("{{AGENT_NAME}} - Claude runtime starting")
     print(f"Interval:  {args.interval} minutes")
@@ -339,8 +371,10 @@ async def main():
 
     try:
         while not shutdown_requested:
+            interval = get_interval(args.interval)
+
             if check_manual_pause():
-                await sleep_while_paused(args.interval)
+                await sleep_while_paused(interval)
                 continue
 
             # Record heartbeat
@@ -351,8 +385,8 @@ async def main():
 
             # Check if waiting for human
             if check_awaiting_human():
-                log(f"Sleeping {args.interval} minutes...")
-                await sleep_with_wakeup(args.interval)
+                log(f"Sleeping {interval} minutes...")
+                await sleep_with_wakeup(interval)
                 continue
 
             # Build prompt and invoke
@@ -373,8 +407,9 @@ async def main():
                 log("More human mailbox messages are pending. Continuing immediately.")
                 continue
 
-            log(f"Heartbeat complete. Sleeping {args.interval} minutes...")
-            await sleep_with_wakeup(args.interval)
+            interval = get_interval(args.interval)
+            log(f"Heartbeat complete. Sleeping {interval} minutes...")
+            await sleep_with_wakeup(interval)
     finally:
         cleanup_pid()
         log("{{AGENT_NAME}} stopped.")

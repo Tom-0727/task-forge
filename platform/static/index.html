@@ -1,0 +1,1054 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Platform</title>
+  <style>
+    :root {
+      --bg-0: #f4efe9;
+      --bg-1: #e6f0ec;
+      --card: rgba(255, 255, 255, 0.86);
+      --ink: #1f2831;
+      --muted: #5f6b78;
+      --line: rgba(31, 40, 49, 0.14);
+      --accent: #2f7a5f;
+      --on-bg: #d5f2e5;
+      --on-fg: #186246;
+      --off-bg: #eceef0;
+      --off-fg: #6c7782;
+      --warn-bg: #fce8e4;
+      --warn-fg: #9d4425;
+      --wait-bg: #fef3cd;
+      --wait-fg: #856404;
+      --human-bg: #dff3e7;
+      --agent-bg: #f4f4f1;
+    }
+    .hidden { display: none !important; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 12% 10%, rgba(47, 122, 95, 0.16), transparent 45%),
+        radial-gradient(circle at 85% 90%, rgba(185, 122, 91, 0.16), transparent 48%),
+        linear-gradient(140deg, var(--bg-0), var(--bg-1));
+    }
+    .app {
+      width: min(1100px, 100%);
+      margin: 0 auto;
+      padding: 28px 16px 40px;
+    }
+    .top {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 2px 0 0; font-size: clamp(1.6rem, 3vw, 2rem); }
+    .kicker {
+      margin: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      margin: 12px 0;
+      background: var(--card);
+      backdrop-filter: blur(6px);
+      box-shadow: 0 10px 30px rgba(25, 38, 32, 0.07);
+    }
+    .panel-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    h2, h3 { margin: 0; font-size: 1.02rem; }
+    .meta { color: var(--muted); font-size: 12px; }
+    button {
+      border: none;
+      border-radius: 10px;
+      padding: 9px 14px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    button:hover { filter: brightness(0.95); }
+    button.warn { background: #9d4425; }
+    button.secondary {
+      background: var(--off-bg);
+      color: var(--ink);
+    }
+    button:disabled { opacity: 0.7; cursor: not-allowed; }
+    .badge {
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      display: inline-block;
+    }
+    .badge.on { background: var(--on-bg); color: var(--on-fg); }
+    .badge.off { background: var(--off-bg); color: var(--off-fg); }
+    .badge.warn { background: var(--warn-bg); color: var(--warn-fg); }
+    .badge.wait { background: var(--wait-bg); color: var(--wait-fg); }
+
+    /* ── Rate Limit ── */
+    .rl-bar-wrap {
+      background: var(--off-bg);
+      border-radius: 8px;
+      height: 22px;
+      overflow: hidden;
+      position: relative;
+    }
+    .rl-bar {
+      height: 100%;
+      border-radius: 8px;
+      transition: width 0.4s ease;
+    }
+    .rl-bar.ok { background: var(--accent); }
+    .rl-bar.warning { background: #e6a817; }
+    .rl-bar.danger { background: #c0392b; }
+    .rl-text {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .rl-meta {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* ── Agent Cards ── */
+    .agents-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+    .agent-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      background: #fff;
+      cursor: pointer;
+      transition: box-shadow 0.15s, transform 0.15s;
+      position: relative;
+    }
+    .agent-card:hover {
+      box-shadow: 0 8px 24px rgba(25, 38, 32, 0.12);
+      transform: translateY(-2px);
+    }
+    .agent-card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .agent-card-name {
+      font-weight: 700;
+      font-size: 15px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .agent-card-info {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .agent-card-msg {
+      font-size: 13px;
+      color: var(--ink);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px dashed var(--line);
+    }
+    .agent-card-tags {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .tag {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: var(--off-bg);
+      color: var(--off-fg);
+    }
+    .agent-card-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--line);
+    }
+    .card-btn {
+      padding: 4px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 6px;
+      background: var(--off-bg);
+      color: var(--ink);
+      border: none;
+      cursor: pointer;
+    }
+    .card-btn:hover { background: #dde0e3; }
+    .card-btn.start { background: var(--on-bg); color: var(--on-fg); }
+    .card-btn.start:hover { background: #b8e6cc; }
+    .card-btn.danger { color: #c0392b; }
+    .card-btn.danger:hover { background: var(--warn-bg); }
+    .dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      min-width: 140px;
+      z-index: 10;
+      overflow: hidden;
+    }
+    .dropdown-item {
+      padding: 8px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+      color: var(--ink);
+      font-family: inherit;
+    }
+    .dropdown-item:hover { background: var(--off-bg); }
+    .dropdown-item.danger { color: #c0392b; }
+
+    /* ── Detail Page ── */
+    .detail-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .detail-header .back-btn {
+      background: var(--off-bg);
+      color: var(--ink);
+      padding: 6px 12px;
+      font-size: 13px;
+    }
+    .detail-status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .detail-fact {
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.58);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .detail-fact strong { font-weight: 700; }
+    .history {
+      max-height: 50vh;
+      overflow: auto;
+      display: grid;
+      gap: 10px;
+      padding-right: 4px;
+    }
+    .msg { display: grid; gap: 4px; }
+    .msg.human { justify-items: end; }
+    .msg.agent { justify-items: start; }
+    .msg-meta { color: var(--muted); font-size: 12px; }
+    .bubble {
+      max-width: min(780px, 100%);
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.45;
+      box-shadow: 0 5px 16px rgba(31, 40, 49, 0.06);
+    }
+    .bubble.human { background: var(--human-bg); }
+    .bubble.agent { background: var(--agent-bg); }
+    textarea {
+      width: 100%;
+      min-height: 100px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      padding: 12px;
+      font: inherit;
+      color: inherit;
+      background: rgba(255, 255, 255, 0.86);
+      resize: vertical;
+    }
+    .row { margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    input[type="text"], select {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font: inherit;
+      font-size: 14px;
+      color: var(--ink);
+      background: #fff;
+      width: 100%;
+    }
+    .form-group { margin-bottom: 12px; }
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      color: var(--muted);
+    }
+
+    /* ── Modal ── */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.3);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal {
+      background: #fff;
+      border-radius: 16px;
+      padding: 24px;
+      width: min(520px, 90vw);
+      max-height: 80vh;
+      overflow-y: auto;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    }
+    .modal h2 { margin-bottom: 16px; }
+
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      user-select: none;
+    }
+    .toggle input { accent-color: var(--accent); }
+
+    @media (max-width: 760px) {
+      .top { align-items: flex-start; flex-direction: column; }
+      .agents-grid { grid-template-columns: 1fr; }
+      .detail-status-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main class="app">
+  <!-- ══════════ Dashboard View ══════════ -->
+  <div id="dashboardView">
+    <header class="top">
+      <div>
+        <p class="kicker">Dashboard</p>
+        <h1>Agent Platform</h1>
+      </div>
+      <div class="top-actions">
+        <label class="toggle">
+          <input id="autoSync" type="checkbox" checked onchange="toggleAutoSync()" />
+          Auto Sync
+        </label>
+        <span id="syncMeta" class="meta"></span>
+        <button onclick="showImportModal()">Import</button>
+        <button onclick="showCreateModal()">+ New Agent</button>
+      </div>
+    </header>
+
+    <!-- Rate Limit -->
+    <section id="rateLimitPanel" class="panel hidden">
+      <div class="panel-head">
+        <h2>Claude Rate Limit</h2>
+        <span id="rlSource" class="meta"></span>
+      </div>
+      <div class="rl-bar-wrap">
+        <div id="rlBar" class="rl-bar ok" style="width: 0%"></div>
+        <div id="rlText" class="rl-text">--</div>
+      </div>
+      <div class="rl-meta">
+        <span id="rlType"></span>
+        <span id="rlReset"></span>
+      </div>
+    </section>
+
+    <!-- Agent Cards -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Agents</h2>
+        <span id="agentCount" class="meta"></span>
+      </div>
+      <div id="agentsGrid" class="agents-grid"></div>
+    </section>
+  </div>
+
+  <!-- ══════════ Agent Detail View ══════════ -->
+  <div id="detailView" class="hidden">
+    <div class="detail-header">
+      <button class="back-btn" onclick="showDashboard()">&larr; Back</button>
+      <h1 id="detailName"></h1>
+      <span id="detailBadge" class="badge"></span>
+      <div style="flex:1"></div>
+      <button id="detailStartBtn" class="hidden" onclick="detailStart()">Start</button>
+      <button id="detailPauseBtn" onclick="detailTogglePause()">Pause</button>
+      <button id="detailStopBtn" class="warn" onclick="detailStop()">Stop</button>
+      <button class="warn" onclick="detailDelete()">Delete</button>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Status</h2>
+        <span id="detailHeartbeat" class="meta"></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px">
+        <span style="color:var(--muted);font-weight:700">Interval</span>
+        <input id="intervalInput" type="number" min="1" value="20"
+          style="width:60px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:13px;text-align:right" />
+        <span>min</span>
+        <button onclick="setInterval_()" style="padding:4px 10px;font-size:12px">Set</button>
+        <span id="intervalResult" class="meta"></span>
+      </div>
+      <div id="detailFacts" class="detail-status-grid"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Mailbox History</h2>
+        <span class="meta">Latest 50 messages</span>
+      </div>
+      <div id="detailHistory" class="history"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Send Message</h2>
+      <textarea id="detailMessage" placeholder="Type message..."></textarea>
+      <div class="row">
+        <button onclick="detailSend()">Send</button>
+        <span id="detailSendResult" class="meta"></span>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- ══════════ Create Modal ══════════ -->
+<div id="createModal" class="modal-overlay hidden" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal">
+    <h2>Create New Agent</h2>
+    <div class="form-group">
+      <label>Goal *</label>
+      <textarea id="createGoal" placeholder="Agent's task goal" style="min-height:60px"></textarea>
+    </div>
+    <div class="form-group">
+      <label>Provider *</label>
+      <select id="createProvider">
+        <option value="claude">Claude</option>
+        <option value="codex">Codex</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Workdir *</label>
+      <input id="createWorkdir" type="text" placeholder="/Users/tom/agents/my-agent" />
+    </div>
+    <div class="form-group">
+      <label>Agent Name (optional)</label>
+      <input id="createAgentName" type="text" placeholder="auto-derived from workdir" />
+    </div>
+    <div class="form-group">
+      <label>Interval (minutes)</label>
+      <input id="createInterval" type="text" value="20" />
+    </div>
+    <div class="form-group">
+      <label>Tags (comma-separated)</label>
+      <input id="createTags" type="text" placeholder="security, auth" />
+    </div>
+    <div class="row">
+      <button onclick="doCreate()">Create</button>
+      <button class="secondary" onclick="document.getElementById('createModal').classList.add('hidden')">Cancel</button>
+      <span id="createResult" class="meta"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ Import Modal ══════════ -->
+<div id="importModal" class="modal-overlay hidden" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="modal">
+    <h2>Import Existing Agent</h2>
+    <div class="form-group">
+      <label>Workdir *</label>
+      <input id="importWorkdir" type="text" placeholder="/Users/tom/agents/existing-agent" />
+    </div>
+    <div class="form-group">
+      <label>Tags (comma-separated)</label>
+      <input id="importTags" type="text" placeholder="imported" />
+    </div>
+    <div class="row">
+      <button onclick="doImport()">Import</button>
+      <button class="secondary" onclick="document.getElementById('importModal').classList.add('hidden')">Cancel</button>
+      <span id="importResult" class="meta"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──
+let currentView = 'dashboard';
+let currentAgent = null;
+let autoSyncTimer = null;
+let openDropdown = null;
+
+function nowText() {
+  return new Date().toLocaleTimeString();
+}
+
+// ── View switching ──
+function showDashboard() {
+  currentView = 'dashboard';
+  currentAgent = null;
+  document.getElementById('dashboardView').classList.remove('hidden');
+  document.getElementById('detailView').classList.add('hidden');
+  refreshDashboard();
+}
+
+function showDetail(name) {
+  currentView = 'detail';
+  currentAgent = name;
+  document.getElementById('dashboardView').classList.add('hidden');
+  document.getElementById('detailView').classList.remove('hidden');
+  document.getElementById('detailName').textContent = name;
+  refreshDetail();
+}
+
+function showCreateModal() {
+  document.getElementById('createModal').classList.remove('hidden');
+  document.getElementById('createResult').textContent = '';
+}
+
+function showImportModal() {
+  document.getElementById('importModal').classList.remove('hidden');
+  document.getElementById('importResult').textContent = '';
+}
+
+// ── Helpers ──
+function stateBadge(status) {
+  if (!status) return { text: 'unknown', cls: 'off' };
+  const s = status.state;
+  if (status.manual_pause) return { text: 'paused', cls: 'warn' };
+  if (status.awaiting_human) return { text: 'awaiting human', cls: 'wait' };
+  if (s === 'running' && status.runner_alive) return { text: 'running', cls: 'on' };
+  if (s === 'running') return { text: 'stale', cls: 'warn' };
+  if (s === 'stopped') return { text: 'stopped', cls: 'off' };
+  if (s === 'paused') return { text: 'paused', cls: 'warn' };
+  return { text: s || 'unknown', cls: 'off' };
+}
+
+function closeAllDropdowns() {
+  document.querySelectorAll('.dropdown').forEach(d => d.remove());
+  openDropdown = null;
+}
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.agent-card-menu')) {
+    closeAllDropdowns();
+  }
+});
+
+// ── Dashboard ──
+async function refreshDashboard() {
+  try {
+    const [agentsResp, rlResp] = await Promise.all([
+      fetch('/api/agents'),
+      fetch('/api/ratelimit'),
+    ]);
+    const agentsData = await agentsResp.json();
+    const rlData = await rlResp.json();
+
+    renderAgentCards(agentsData.agents || []);
+    renderRateLimit(rlData);
+    document.getElementById('syncMeta').textContent = `Last sync ${nowText()}`;
+  } catch (err) {
+    document.getElementById('syncMeta').textContent = 'Sync failed';
+  }
+}
+
+function renderAgentCards(agents) {
+  const grid = document.getElementById('agentsGrid');
+  grid.innerHTML = '';
+
+  const running = agents.filter(a => a.status && a.status.state === 'running' && a.status.runner_alive).length;
+  document.getElementById('agentCount').textContent = `Active: ${running} / ${agents.length} agents`;
+
+  for (const agent of agents) {
+    const card = document.createElement('div');
+    card.className = 'agent-card';
+    card.onclick = (e) => {
+      if (e.target.closest('.agent-card-menu')) return;
+      showDetail(agent.name);
+    };
+
+    const badge = stateBadge(agent.status);
+    const lastHb = agent.status ? agent.status.last_heartbeat : 'none';
+    const lastMsg = agent.status ? agent.status.last_message : '';
+    const tags = (agent.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+
+    card.innerHTML = `
+      <div class="agent-card-top">
+        <span class="agent-card-name">${esc(agent.name)}</span>
+        <span class="badge ${badge.cls}">${badge.text}</span>
+      </div>
+      <div class="agent-card-info">${esc(agent.provider || '?')} &middot; ${agent.interval || '?'}min &middot; ${esc(lastHb)}</div>
+      ${agent.goal ? `<div class="agent-card-info" style="font-style:italic">${esc((agent.goal || '').substring(0, 80))}</div>` : ''}
+      ${lastMsg ? `<div class="agent-card-msg">${esc(lastMsg)}</div>` : ''}
+      ${tags ? `<div class="agent-card-tags">${tags}</div>` : ''}
+      <div class="agent-card-actions" onclick="event.stopPropagation()">
+        ${badge.text === 'stopped' || badge.text === 'stale'
+          ? `<button class="card-btn start" onclick="cardStart('${esc(agent.name)}')">Start</button>`
+          : `<button class="card-btn" onclick="cardAction('${esc(agent.name)}','pause')">Pause</button>
+             <button class="card-btn" onclick="cardAction('${esc(agent.name)}','resume')">Resume</button>
+             <button class="card-btn" onclick="cardAction('${esc(agent.name)}','stop')">Stop</button>`
+        }
+        <button class="card-btn danger" onclick="cardDelete('${esc(agent.name)}')">Delete</button>
+      </div>
+    `;
+    grid.appendChild(card);
+  }
+}
+
+function toggleCardMenu(e, name) {
+  e.stopPropagation();
+  const menuBtn = e.target.closest('.agent-card-menu');
+
+  if (openDropdown === name) {
+    closeAllDropdowns();
+    return;
+  }
+  closeAllDropdowns();
+
+  const dd = document.createElement('div');
+  dd.className = 'dropdown';
+  dd.innerHTML = `
+    <button class="dropdown-item" onclick="cardAction('${esc(name)}','pause')">Pause</button>
+    <button class="dropdown-item" onclick="cardAction('${esc(name)}','resume')">Resume</button>
+    <button class="dropdown-item" onclick="cardAction('${esc(name)}','stop')">Stop</button>
+    <button class="dropdown-item danger" onclick="cardDelete('${esc(name)}')">Delete</button>
+  `;
+  menuBtn.appendChild(dd);
+  openDropdown = name;
+}
+
+async function cardAction(name, action) {
+  closeAllDropdowns();
+  const url = `/api/agents/${encodeURIComponent(name)}/${action}`;
+  const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
+  if (action === 'pause') {
+    opts.body = JSON.stringify({ reason: 'paused from platform' });
+  }
+  try {
+    const resp = await fetch(url, opts);
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert('Failed: ' + (data.error || 'unknown error'));
+    }
+  } catch (err) { /* ignore */ }
+  setTimeout(refreshDashboard, 500);
+}
+
+async function cardStart(name) {
+  closeAllDropdowns();
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(name)}/start`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert('Start failed: ' + (data.error || 'unknown') + (data.stderr ? '\n' + data.stderr : ''));
+    }
+  } catch (err) { /* ignore */ }
+  setTimeout(refreshDashboard, 1500);
+}
+
+async function cardDelete(name) {
+  closeAllDropdowns();
+  if (!confirm(`Delete agent "${name}"?\n\nThis will STOP the agent and DELETE its entire working directory. This cannot be undone.`)) {
+    return;
+  }
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(name)}/delete`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert('Delete failed: ' + (data.error || 'unknown error'));
+    }
+  } catch (err) { /* ignore */ }
+  setTimeout(refreshDashboard, 500);
+}
+
+function renderRateLimit(data) {
+  const panel = document.getElementById('rateLimitPanel');
+  if (!data.claude) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+  const cl = data.claude;
+  const pct = Math.round((cl.utilization || 0) * 100);
+
+  const bar = document.getElementById('rlBar');
+  bar.style.width = pct + '%';
+  bar.className = 'rl-bar ' + (pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'ok');
+
+  document.getElementById('rlText').textContent = pct + '% used';
+  document.getElementById('rlType').textContent = cl.rate_limit_type ? `Window: ${cl.rate_limit_type}` : '';
+
+  let resetText = '';
+  if (cl.resets_at) {
+    const d = new Date(cl.resets_at * 1000);
+    resetText = 'Resets at ' + d.toLocaleTimeString();
+  }
+  document.getElementById('rlReset').textContent = resetText;
+  document.getElementById('rlSource').textContent = `Source: ${cl.source_agent || '?'} · ${cl.last_updated || ''}`;
+}
+
+// ── Detail Page ──
+async function refreshDetail() {
+  if (!currentAgent) return;
+  try {
+    const [statusResp, historyResp] = await Promise.all([
+      fetch(`/api/agents/${encodeURIComponent(currentAgent)}/status`),
+      fetch(`/api/agents/${encodeURIComponent(currentAgent)}/history?limit=50`),
+    ]);
+    const statusData = await statusResp.json();
+    const historyData = await historyResp.json();
+
+    renderDetailStatus(statusData);
+    renderDetailHistory(historyData.messages || []);
+  } catch (err) { /* ignore */ }
+}
+
+function renderDetailStatus(data) {
+  const status = data.status || {};
+  const badge = stateBadge(status);
+
+  const badgeEl = document.getElementById('detailBadge');
+  badgeEl.textContent = badge.text;
+  badgeEl.className = 'badge ' + badge.cls;
+
+  document.getElementById('detailHeartbeat').textContent = `Last heartbeat: ${status.last_heartbeat || 'none'}`;
+
+  const isStopped = badge.text === 'stopped' || badge.text === 'stale';
+  const startBtn = document.getElementById('detailStartBtn');
+  const pauseBtn = document.getElementById('detailPauseBtn');
+  const stopBtn = document.getElementById('detailStopBtn');
+
+  startBtn.classList.toggle('hidden', !isStopped);
+  pauseBtn.classList.toggle('hidden', isStopped);
+  stopBtn.classList.toggle('hidden', isStopped);
+
+  if (status.manual_pause) {
+    pauseBtn.textContent = 'Resume';
+    pauseBtn.className = '';
+  } else {
+    pauseBtn.textContent = 'Pause';
+    pauseBtn.className = 'warn';
+  }
+
+  const facts = document.getElementById('detailFacts');
+  facts.innerHTML = '';
+  const items = [
+    ['Provider', data.provider || '-'],
+    ['State', status.state || '-'],
+    ['Runner PID', status.runner_pid || '-'],
+    ['Awaiting Human', status.awaiting_human ? 'YES' : 'NO'],
+    ['Manual Pause', status.manual_pause ? 'YES' : 'NO'],
+  ];
+  if (status.manual_pause_reason) {
+    items.push(['Pause Reason', status.manual_pause_reason]);
+  }
+
+  // Update interval input only if not focused
+  const intervalInput = document.getElementById('intervalInput');
+  if (intervalInput && document.activeElement !== intervalInput) {
+    intervalInput.value = data.interval || 20;
+  }
+
+  for (const [label, value] of items) {
+    const el = document.createElement('div');
+    el.className = 'detail-fact';
+    el.innerHTML = `<span>${esc(label)}</span><strong>${esc(String(value))}</strong>`;
+    facts.appendChild(el);
+  }
+}
+
+function renderDetailHistory(messages) {
+  const root = document.getElementById('detailHistory');
+  const shouldStick = root.scrollHeight - root.scrollTop - root.clientHeight < 80;
+
+  root.innerHTML = '';
+  for (const item of messages) {
+    const isHuman = item.role === 'human';
+    const wrap = document.createElement('div');
+    wrap.className = `msg ${isHuman ? 'human' : 'agent'}`;
+
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    meta.textContent = `${item.ts} · ${item.role} · ${item.task_id}`;
+    wrap.appendChild(meta);
+
+    const bubble = document.createElement('div');
+    bubble.className = `bubble ${isHuman ? 'human' : 'agent'}`;
+    bubble.textContent = item.message;
+    wrap.appendChild(bubble);
+
+    root.appendChild(wrap);
+  }
+
+  if (shouldStick) {
+    root.scrollTop = root.scrollHeight;
+  }
+}
+
+async function setInterval_() {
+  if (!currentAgent) return;
+  const input = document.getElementById('intervalInput');
+  const result = document.getElementById('intervalResult');
+  const val = parseInt(input.value);
+  if (!val || val < 1) { result.textContent = 'Must be >= 1'; return; }
+  result.textContent = 'Saving...';
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/interval`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interval: val }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { result.textContent = 'Failed: ' + (data.error || 'unknown'); return; }
+    result.textContent = 'Saved';
+    input.blur();
+    setTimeout(() => { result.textContent = ''; }, 2000);
+  } catch (err) { result.textContent = 'Failed'; }
+}
+
+async function detailTogglePause() {
+  if (!currentAgent) return;
+  const btn = document.getElementById('detailPauseBtn');
+  const isPaused = btn.textContent === 'Resume';
+  const action = isPaused ? 'resume' : 'pause';
+  const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
+  if (action === 'pause') {
+    opts.body = JSON.stringify({ reason: 'paused from platform' });
+  }
+  try {
+    await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/${action}`, opts);
+    setTimeout(refreshDetail, 500);
+  } catch (err) { /* ignore */ }
+}
+
+async function detailStart() {
+  if (!currentAgent) return;
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/start`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert('Start failed: ' + (data.error || 'unknown') + (data.stderr ? '\n' + data.stderr : ''));
+      return;
+    }
+    setTimeout(refreshDetail, 1500);
+  } catch (err) { alert('Start failed'); }
+}
+
+async function detailStop() {
+  if (!currentAgent) return;
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/stop`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert('Stop failed: ' + (data.error || 'unknown'));
+    }
+    setTimeout(refreshDetail, 1000);
+  } catch (err) { /* ignore */ }
+}
+
+async function detailDelete() {
+  if (!currentAgent) return;
+  if (!confirm(`Delete agent "${currentAgent}"?\n\nThis will STOP the agent and DELETE its entire working directory. This cannot be undone.`)) {
+    return;
+  }
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/delete`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert('Delete failed: ' + (data.error || 'unknown'));
+      return;
+    }
+    showDashboard();
+  } catch (err) { alert('Delete failed'); }
+}
+
+async function detailSend() {
+  if (!currentAgent) return;
+  const input = document.getElementById('detailMessage');
+  const result = document.getElementById('detailSendResult');
+  const text = input.value.trim();
+  result.textContent = '';
+  if (!text) {
+    result.textContent = 'Message is empty';
+    return;
+  }
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      result.textContent = 'Error: ' + (data.error || 'send failed');
+      return;
+    }
+    input.value = '';
+    result.textContent = 'Sent: ' + (data.entry ? data.entry.id : 'ok');
+    setTimeout(refreshDetail, 500);
+  } catch (err) {
+    result.textContent = 'Send failed';
+  }
+}
+
+// ── Create / Import ──
+async function doCreate() {
+  const result = document.getElementById('createResult');
+  result.textContent = 'Creating...';
+
+  const goal = document.getElementById('createGoal').value.trim();
+  const provider = document.getElementById('createProvider').value;
+  const workdir = document.getElementById('createWorkdir').value.trim();
+  const agentName = document.getElementById('createAgentName').value.trim();
+  const interval = parseInt(document.getElementById('createInterval').value) || 20;
+  const tags = document.getElementById('createTags').value.split(',').map(s => s.trim()).filter(Boolean);
+
+  if (!goal || !workdir) {
+    result.textContent = 'Goal and workdir are required';
+    return;
+  }
+
+  try {
+    const resp = await fetch('/api/agents/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goal, provider, workdir, agent_name: agentName, interval, tags }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      result.textContent = 'Error: ' + (data.error || 'create failed');
+      if (data.stderr) result.textContent += '\n' + data.stderr;
+      return;
+    }
+    document.getElementById('createModal').classList.add('hidden');
+    refreshDashboard();
+  } catch (err) {
+    result.textContent = 'Create failed: ' + err.message;
+  }
+}
+
+async function doImport() {
+  const result = document.getElementById('importResult');
+  result.textContent = 'Importing...';
+
+  const workdir = document.getElementById('importWorkdir').value.trim();
+  const tags = document.getElementById('importTags').value.split(',').map(s => s.trim()).filter(Boolean);
+
+  if (!workdir) {
+    result.textContent = 'Workdir is required';
+    return;
+  }
+
+  try {
+    const resp = await fetch('/api/agents/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workdir, tags }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      result.textContent = 'Error: ' + (data.error || 'import failed');
+      return;
+    }
+    document.getElementById('importModal').classList.add('hidden');
+    refreshDashboard();
+  } catch (err) {
+    result.textContent = 'Import failed: ' + err.message;
+  }
+}
+
+// ── Auto Sync ──
+function toggleAutoSync() {
+  const enabled = document.getElementById('autoSync').checked;
+  if (!enabled) {
+    if (autoSyncTimer) { clearInterval(autoSyncTimer); autoSyncTimer = null; }
+    document.getElementById('syncMeta').textContent = 'Auto sync off';
+    return;
+  }
+  if (autoSyncTimer) clearInterval(autoSyncTimer);
+  const interval = document.hidden ? 5000 : 2000;
+  autoSyncTimer = setInterval(() => {
+    if (!document.getElementById('autoSync').checked) return;
+    if (currentView === 'dashboard') refreshDashboard();
+    else if (currentView === 'detail') refreshDetail();
+  }, interval);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.getElementById('autoSync').checked) {
+    toggleAutoSync();
+  }
+});
+
+// ── Escape HTML ──
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── Init ──
+refreshDashboard();
+toggleAutoSync();
+</script>
+</body>
+</html>
