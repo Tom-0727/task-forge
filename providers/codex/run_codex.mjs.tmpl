@@ -26,6 +26,7 @@ const MAILBOX = path.join(AGENT_DIR, "mailbox", "MAILBOX.jsonl");
 const AWAITING_FILE = path.join(RUNTIME_DIR, "awaiting_human");
 const PENDING_HUMAN_FILE = path.join(RUNTIME_DIR, "pending_human.json");
 const MANUAL_PAUSE_FILE = path.join(RUNTIME_DIR, "manual_pause.json");
+const INTERVAL_FILE = path.join(RUNTIME_DIR, "interval");
 
 let shutdownRequested = false;
 let currentAbortController = null;
@@ -172,6 +173,15 @@ function readText(filePath) {
 function writeText(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, value, "utf8");
+}
+
+function getInterval(defaultInterval) {
+  try {
+    const value = parseInt(fs.readFileSync(INTERVAL_FILE, "utf8").trim(), 10);
+    return value > 0 ? value : defaultInterval;
+  } catch {
+    return defaultInterval;
+  }
 }
 
 function removeFile(filePath) {
@@ -526,6 +536,9 @@ async function main() {
 
   checkAndWritePid();
 
+  // Write initial interval so platform can read/modify it
+  writeText(INTERVAL_FILE, String(args.interval));
+
   console.log("============================================================");
   console.log("{{AGENT_NAME}} - Codex runtime starting");
   console.log(`Interval:    ${args.interval} minutes`);
@@ -541,8 +554,10 @@ async function main() {
 
   try {
     while (!shutdownRequested) {
+      let interval = getInterval(args.interval);
+
       if (checkManualPause()) {
-        await sleepWhilePaused(args.interval);
+        await sleepWhilePaused(interval);
         continue;
       }
 
@@ -551,8 +566,8 @@ async function main() {
       log("Heartbeat - starting");
 
       if (checkAwaitingHuman()) {
-        log(`Sleeping ${args.interval} minutes...`);
-        await sleepWithWakeup(args.interval);
+        log(`Sleeping ${interval} minutes...`);
+        await sleepWithWakeup(interval);
         continue;
       }
 
@@ -581,8 +596,9 @@ async function main() {
         continue;
       }
 
-      log(`Heartbeat complete. Sleeping ${args.interval} minutes...`);
-      await sleepWithWakeup(args.interval);
+      interval = getInterval(args.interval);
+      log(`Heartbeat complete. Sleeping ${interval} minutes...`);
+      await sleepWithWakeup(interval);
     }
   } finally {
     cleanupPid();
