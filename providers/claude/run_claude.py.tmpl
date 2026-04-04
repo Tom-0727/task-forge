@@ -39,6 +39,7 @@ PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
 MANUAL_PAUSE_FILE = RUNTIME_DIR / "manual_pause.json"
 RATELIMIT_FILE = RUNTIME_DIR / "ratelimit.json"
 INTERVAL_FILE = RUNTIME_DIR / "interval"
+WORK_SCHEDULE_FILE = RUNTIME_DIR / "work_schedule.json"
 
 # ─── Globals ──────────────────────────────────────────────────────────
 
@@ -342,6 +343,127 @@ def get_interval(default: int) -> int:
     return default
 
 
+# ─── Work schedule ──────────────────────────────────────────────────
+
+def load_work_schedule() -> dict | None:
+    """Load Runtime/work_schedule.json. Returns None if absent or invalid."""
+    if not WORK_SCHEDULE_FILE.exists():
+        return None
+    try:
+        data = json.loads(WORK_SCHEDULE_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    windows = data.get("windows")
+    if not isinstance(windows, list) or len(windows) == 0:
+        return None
+    return data
+
+
+def _parse_hhmm(hhmm: str) -> tuple[int, int]:
+    parts = hhmm.strip().split(":")
+    return int(parts[0]), int(parts[1])
+
+
+def is_in_work_window(schedule: dict) -> bool:
+    """Check if current time falls within any configured work window."""
+    from zoneinfo import ZoneInfo
+
+    tz_name = schedule.get("timezone", "UTC")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+
+    now = datetime.now(tz)
+    iso_weekday = now.isoweekday()  # 1=Mon, 7=Sun
+    current_minutes = now.hour * 60 + now.minute
+
+    for window in schedule.get("windows", []):
+        days = window.get("days", [])
+        if iso_weekday not in days:
+            continue
+        start_h, start_m = _parse_hhmm(window.get("start", "00:00"))
+        end_h, end_m = _parse_hhmm(window.get("end", "23:59"))
+        start_total = start_h * 60 + start_m
+        end_total = end_h * 60 + end_m
+        if start_total <= current_minutes < end_total:
+            return True
+    return False
+
+
+def seconds_until_next_window(schedule: dict) -> int:
+    """Calculate seconds from now until the next work window opens."""
+    from zoneinfo import ZoneInfo
+
+    tz_name = schedule.get("timezone", "UTC")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+
+    now = datetime.now(tz)
+    iso_weekday = now.isoweekday()
+    current_minutes = now.hour * 60 + now.minute
+
+    best = None
+
+    for day_offset in range(8):  # check up to 7 days ahead
+        check_day = ((iso_weekday - 1 + day_offset) % 7) + 1
+
+        for window in schedule.get("windows", []):
+            days = window.get("days", [])
+            if check_day not in days:
+                continue
+            start_h, start_m = _parse_hhmm(window.get("start", "00:00"))
+            start_total = start_h * 60 + start_m
+
+            if day_offset == 0 and start_total <= current_minutes:
+                continue  # this window already started today
+
+            minutes_away = day_offset * 1440 + (start_total - current_minutes)
+            seconds_away = minutes_away * 60 - now.second
+            if best is None or seconds_away < best:
+                best = seconds_away
+
+    return max(best or 3600, 60)  # fallback 1h, minimum 1min
+
+
+async def sleep_until_work_window(schedule: dict):
+    """Sleep until the next work window opens, waking on human messages."""
+    wait_seconds = seconds_until_next_window(schedule)
+    log(f"Off hours. Sleeping {wait_seconds // 60} minutes until next work window.")
+
+    slept = 0
+    while slept < wait_seconds and not shutdown_requested:
+        if load_pending_human():
+            log("Human message received during off hours. Waking immediately.")
+            return
+        if AWAITING_FILE.exists() and has_new_human_messages():
+            log("New human message during off hours. Waking immediately.")
+            return
+        # Re-check schedule every 60s in case file was updated
+        if slept > 0 and slept % 60 == 0:
+            fresh = load_work_schedule()
+            if fresh is None or is_in_work_window(fresh):
+                log("Work schedule changed. Now in work window.")
+                return
+        await asyncio.sleep(1)
+        slept += 1
+
+
+def check_work_schedule() -> bool:
+    """Return True if currently off hours and heartbeat should be skipped."""
+    schedule = load_work_schedule()
+    if schedule is None:
+        return False  # no schedule = 24/7
+    if is_in_work_window(schedule):
+        return False
+    STATE_FILE.write_text("off_hours")
+    return True
+
+
 # ─── Main loop ────────────────────────────────────────────────────────
 
 async def main():
@@ -375,6 +497,10 @@ async def main():
 
             if check_manual_pause():
                 await sleep_while_paused(interval)
+                continue
+
+            if check_work_schedule():
+                await sleep_until_work_window(load_work_schedule())
                 continue
 
             # Record heartbeat

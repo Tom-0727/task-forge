@@ -344,6 +344,76 @@ def api_agent_interval(name: str):
     return jsonify({"ok": True, "interval": interval})
 
 
+# ── API: Work schedule ──────────────────────────────────────────────
+
+@app.route("/api/agents/<name>/schedule", methods=["GET"])
+def api_agent_schedule_get(name: str):
+    info, workdir = _resolve_agent(name)
+    if not info:
+        return jsonify({"error": "agent not found"}), 404
+    if not workdir:
+        return jsonify({"error": "workdir not found"}), 404
+
+    schedule_file = workdir / "Runtime" / "work_schedule.json"
+    if not schedule_file.exists():
+        return jsonify({"schedule": None})
+
+    try:
+        schedule = json.loads(schedule_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return jsonify({"schedule": None})
+
+    return jsonify({"schedule": schedule})
+
+
+@app.route("/api/agents/<name>/schedule", methods=["POST"])
+def api_agent_schedule_set(name: str):
+    info, workdir = _resolve_agent(name)
+    if not info:
+        return jsonify({"error": "agent not found"}), 404
+    if not workdir:
+        return jsonify({"error": "workdir not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    schedule = body.get("schedule")
+
+    runtime_dir = workdir / "Runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    schedule_file = runtime_dir / "work_schedule.json"
+
+    # schedule=null means clear (24/7 mode)
+    if schedule is None:
+        schedule_file.unlink(missing_ok=True)
+        update_agent(name, {"work_schedule": None})
+        return jsonify({"ok": True, "schedule": None})
+
+    if not isinstance(schedule, dict):
+        return jsonify({"error": "schedule must be an object or null"}), 400
+
+    windows = schedule.get("windows")
+    if not isinstance(windows, list) or len(windows) == 0:
+        return jsonify({"error": "schedule.windows must be a non-empty array"}), 400
+
+    for i, w in enumerate(windows):
+        if not isinstance(w, dict):
+            return jsonify({"error": f"windows[{i}] must be an object"}), 400
+        if not isinstance(w.get("days"), list) or not w["days"]:
+            return jsonify({"error": f"windows[{i}].days must be a non-empty array of integers"}), 400
+        for d in w["days"]:
+            if not isinstance(d, int) or d < 1 or d > 7:
+                return jsonify({"error": f"windows[{i}].days values must be integers 1-7"}), 400
+        if not isinstance(w.get("start"), str) or not isinstance(w.get("end"), str):
+            return jsonify({"error": f"windows[{i}].start and .end must be HH:MM strings"}), 400
+
+    schedule_file.write_text(
+        json.dumps(schedule, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    update_agent(name, {"work_schedule": schedule})
+
+    return jsonify({"ok": True, "schedule": schedule})
+
+
 # ── API: Start (restart a stopped agent) ─────────────────────────────────
 
 @app.route("/api/agents/<name>/start", methods=["POST"])
@@ -532,6 +602,15 @@ def api_agents_create():
     if not resolved_name:
         resolved_name = workdir_path.name
 
+    # Write work_schedule if provided
+    work_schedule = body.get("work_schedule")
+    if isinstance(work_schedule, dict) and work_schedule.get("windows"):
+        schedule_file = workdir_path / "Runtime" / "work_schedule.json"
+        schedule_file.write_text(
+            json.dumps(work_schedule, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
     # Register in platform registry
     entry = register_agent(
         name=resolved_name,
@@ -541,6 +620,7 @@ def api_agents_create():
         interval=interval,
         tags=tags,
         interaction="platform",
+        work_schedule=work_schedule if isinstance(work_schedule, dict) else None,
     )
 
     return jsonify({"ok": True, "agent": entry})

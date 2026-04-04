@@ -55,6 +55,7 @@ def register_agent(
     interval: int = 20,
     tags: list[str] | None = None,
     interaction: str = "platform",
+    work_schedule: dict | None = None,
 ) -> dict:
     data = _load()
     entry = {
@@ -66,6 +67,7 @@ def register_agent(
         "goal": goal,
         "interval": interval,
         "tags": tags or [],
+        "work_schedule": work_schedule,
     }
     data["agents"][name] = entry
     _save(data)

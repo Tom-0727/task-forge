@@ -27,6 +27,7 @@ const AWAITING_FILE = path.join(RUNTIME_DIR, "awaiting_human");
 const PENDING_HUMAN_FILE = path.join(RUNTIME_DIR, "pending_human.json");
 const MANUAL_PAUSE_FILE = path.join(RUNTIME_DIR, "manual_pause.json");
 const INTERVAL_FILE = path.join(RUNTIME_DIR, "interval");
+const WORK_SCHEDULE_FILE = path.join(RUNTIME_DIR, "work_schedule.json");
 
 let shutdownRequested = false;
 let currentAbortController = null;
@@ -369,6 +370,148 @@ async function sleepWhilePaused(minutes) {
   }
 }
 
+// ─── Work schedule ─────────────────────────────────────────────────
+
+function loadWorkSchedule() {
+  if (!fileExists(WORK_SCHEDULE_FILE)) {
+    return null;
+  }
+  try {
+    const data = JSON.parse(readText(WORK_SCHEDULE_FILE));
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      !Array.isArray(data.windows) ||
+      data.windows.length === 0
+    ) {
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function parseHHMM(hhmm) {
+  const parts = String(hhmm || "00:00").trim().split(":");
+  return [parseInt(parts[0], 10), parseInt(parts[1], 10)];
+}
+
+function getNowInTz(tzName) {
+  const tz = tzName || "UTC";
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    weekday: "short",
+  });
+  const parts = {};
+  for (const { type, value } of formatter.formatToParts(new Date())) {
+    parts[type] = value;
+  }
+  const weekdayMap = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+  return {
+    isoWeekday: weekdayMap[parts.weekday] || 1,
+    hour: parseInt(parts.hour, 10),
+    minute: parseInt(parts.minute, 10),
+    second: parseInt(parts.second, 10),
+  };
+}
+
+function isInWorkWindow(schedule) {
+  const now = getNowInTz(schedule.timezone);
+  const currentMinutes = now.hour * 60 + now.minute;
+
+  for (const window of schedule.windows) {
+    const days = window.days || [];
+    if (!days.includes(now.isoWeekday)) {
+      continue;
+    }
+    const [startH, startM] = parseHHMM(window.start);
+    const [endH, endM] = parseHHMM(window.end);
+    const startTotal = startH * 60 + startM;
+    const endTotal = endH * 60 + endM;
+    if (currentMinutes >= startTotal && currentMinutes < endTotal) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function secondsUntilNextWindow(schedule) {
+  const now = getNowInTz(schedule.timezone);
+  const currentMinutes = now.hour * 60 + now.minute;
+  let best = null;
+
+  for (let dayOffset = 0; dayOffset < 8; dayOffset += 1) {
+    const checkDay = ((now.isoWeekday - 1 + dayOffset) % 7) + 1;
+
+    for (const window of schedule.windows) {
+      const days = window.days || [];
+      if (!days.includes(checkDay)) {
+        continue;
+      }
+      const [startH, startM] = parseHHMM(window.start);
+      const startTotal = startH * 60 + startM;
+
+      if (dayOffset === 0 && startTotal <= currentMinutes) {
+        continue;
+      }
+
+      const minutesAway = dayOffset * 1440 + (startTotal - currentMinutes);
+      const secondsAway = minutesAway * 60 - now.second;
+      if (best === null || secondsAway < best) {
+        best = secondsAway;
+      }
+    }
+  }
+
+  return Math.max(best || 3600, 60);
+}
+
+async function sleepUntilWorkWindow(schedule) {
+  const waitSeconds = secondsUntilNextWindow(schedule);
+  log(`Off hours. Sleeping ${Math.floor(waitSeconds / 60)} minutes until next work window.`);
+
+  for (let slept = 0; slept < waitSeconds && !shutdownRequested; slept += 1) {
+    if (loadPendingHuman()) {
+      log("Human message received during off hours. Waking immediately.");
+      return;
+    }
+    if (fileExists(AWAITING_FILE) && hasNewHumanMessages()) {
+      log("New human message during off hours. Waking immediately.");
+      return;
+    }
+    if (slept > 0 && slept % 60 === 0) {
+      const fresh = loadWorkSchedule();
+      if (fresh === null || isInWorkWindow(fresh)) {
+        log("Work schedule changed. Now in work window.");
+        return;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+function checkWorkSchedule() {
+  const schedule = loadWorkSchedule();
+  if (schedule === null) {
+    return false;
+  }
+  if (isInWorkWindow(schedule)) {
+    return false;
+  }
+  writeText(STATE_FILE, "off_hours");
+  return true;
+}
+
+// ─── Prompt building ───────────────────────────────────────────────
+
 function buildPrompt(firstHeartbeat, pendingHuman) {
   if (pendingHuman) {
     const pendingId = pendingHuman.mailbox_id || "unknown";
@@ -558,6 +701,11 @@ async function main() {
 
       if (checkManualPause()) {
         await sleepWhilePaused(interval);
+        continue;
+      }
+
+      if (checkWorkSchedule()) {
+        await sleepUntilWorkWindow(loadWorkSchedule());
         continue;
       }
 

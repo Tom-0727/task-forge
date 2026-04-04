@@ -21,6 +21,8 @@
       --warn-fg: #9d4425;
       --wait-bg: #fef3cd;
       --wait-fg: #856404;
+      --offhours-bg: #e8e0f0;
+      --offhours-fg: #5b3a8c;
       --human-bg: #dff3e7;
       --agent-bg: #f4f4f1;
     }
@@ -111,6 +113,7 @@
     .badge.off { background: var(--off-bg); color: var(--off-fg); }
     .badge.warn { background: var(--warn-bg); color: var(--warn-fg); }
     .badge.wait { background: var(--wait-bg); color: var(--wait-fg); }
+    .badge.offhours { background: var(--offhours-bg); color: var(--offhours-fg); }
 
     /* ── Rate Limit ── */
     .rl-bar-wrap {
@@ -339,6 +342,48 @@
       color: var(--muted);
     }
 
+    /* ── Schedule row ── */
+    .sched-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+      flex-wrap: wrap;
+      font-size: 12px;
+    }
+    .sched-row input[type="time"] {
+      padding: 3px 6px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font: inherit;
+      font-size: 12px;
+      width: 90px;
+    }
+    .sched-day {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px 5px;
+      border-radius: 4px;
+      cursor: pointer;
+      user-select: none;
+      font-size: 11px;
+      font-weight: 700;
+      background: var(--off-bg);
+      color: var(--off-fg);
+    }
+    .sched-day.active {
+      background: var(--accent);
+      color: #fff;
+    }
+    .sched-del {
+      cursor: pointer;
+      color: #c0392b;
+      font-weight: 700;
+      font-size: 14px;
+      padding: 0 4px;
+    }
+
     /* ── Modal ── */
     .modal-overlay {
       position: fixed;
@@ -450,6 +495,24 @@
         <span id="intervalResult" class="meta"></span>
       </div>
       <div id="detailFacts" class="detail-status-grid"></div>
+
+      <div style="margin-top:14px;border-top:1px dashed var(--line);padding-top:12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="color:var(--muted);font-weight:700;font-size:13px">Work Schedule</span>
+          <span id="scheduleResult" class="meta"></span>
+        </div>
+        <div id="scheduleWindows"></div>
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+          <button onclick="addScheduleRow()" style="padding:4px 10px;font-size:12px" class="secondary">+ Add Window</button>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="color:var(--muted);font-size:12px">Timezone</span>
+            <input id="scheduleTz" type="text" value="Asia/Shanghai"
+              style="width:140px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:12px" />
+          </div>
+          <button onclick="saveSchedule()" style="padding:4px 10px;font-size:12px">Save</button>
+          <button onclick="clearSchedule()" style="padding:4px 10px;font-size:12px" class="secondary">Clear (24/7)</button>
+        </div>
+      </div>
     </section>
 
     <section class="panel">
@@ -557,6 +620,7 @@ function showDetail(name) {
   document.getElementById('detailView').classList.remove('hidden');
   document.getElementById('detailName').textContent = name;
   refreshDetail();
+  loadSchedule();
 }
 
 function showCreateModal() {
@@ -574,6 +638,7 @@ function stateBadge(status) {
   if (!status) return { text: 'unknown', cls: 'off' };
   const s = status.state;
   if (status.manual_pause) return { text: 'paused', cls: 'warn' };
+  if (s === 'off_hours') return { text: 'off hours', cls: 'offhours' };
   if (status.awaiting_human) return { text: 'awaiting human', cls: 'wait' };
   if (s === 'running' && status.runner_alive) return { text: 'running', cls: 'on' };
   if (s === 'running') return { text: 'stale', cls: 'warn' };
@@ -842,6 +907,107 @@ function renderDetailHistory(messages) {
   if (shouldStick) {
     root.scrollTop = root.scrollHeight;
   }
+}
+
+// ── Work Schedule ──
+const DAY_LABELS = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function addScheduleRow(days, start, end) {
+  const container = document.getElementById('scheduleWindows');
+  const row = document.createElement('div');
+  row.className = 'sched-row';
+
+  const activeDays = new Set(days || [1,2,3,4,5]);
+
+  let dayHtml = '';
+  for (let d = 1; d <= 7; d++) {
+    dayHtml += `<span class="sched-day ${activeDays.has(d) ? 'active' : ''}" data-day="${d}" onclick="this.classList.toggle('active')">${DAY_LABELS[d]}</span>`;
+  }
+
+  row.innerHTML = `
+    ${dayHtml}
+    <input type="time" class="sched-start" value="${start || '09:00'}" />
+    <span>-</span>
+    <input type="time" class="sched-end" value="${end || '18:00'}" />
+    <span class="sched-del" onclick="this.parentElement.remove()">&times;</span>
+  `;
+  container.appendChild(row);
+}
+
+function collectSchedule() {
+  const rows = document.querySelectorAll('#scheduleWindows .sched-row');
+  const windows = [];
+  for (const row of rows) {
+    const days = [];
+    row.querySelectorAll('.sched-day.active').forEach(el => {
+      days.push(parseInt(el.dataset.day));
+    });
+    const start = row.querySelector('.sched-start').value;
+    const end = row.querySelector('.sched-end').value;
+    if (days.length > 0 && start && end) {
+      windows.push({ days, start, end });
+    }
+  }
+  return windows;
+}
+
+async function loadSchedule() {
+  if (!currentAgent) return;
+  const container = document.getElementById('scheduleWindows');
+  container.innerHTML = '';
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/schedule`);
+    const data = await resp.json();
+    if (data.schedule && data.schedule.windows && data.schedule.windows.length > 0) {
+      document.getElementById('scheduleTz').value = data.schedule.timezone || 'UTC';
+      for (const w of data.schedule.windows) {
+        addScheduleRow(w.days, w.start, w.end);
+      }
+    }
+  } catch (err) { /* ignore */ }
+}
+
+async function saveSchedule() {
+  if (!currentAgent) return;
+  const result = document.getElementById('scheduleResult');
+  const windows = collectSchedule();
+  const timezone = document.getElementById('scheduleTz').value.trim() || 'UTC';
+
+  if (windows.length === 0) {
+    result.textContent = 'Add at least one window, or use Clear for 24/7';
+    return;
+  }
+
+  result.textContent = 'Saving...';
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/schedule`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schedule: { timezone, windows } }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { result.textContent = 'Failed: ' + (data.error || 'unknown'); return; }
+    result.textContent = 'Saved';
+    setTimeout(() => { result.textContent = ''; }, 2000);
+  } catch (err) { result.textContent = 'Failed'; }
+}
+
+async function clearSchedule() {
+  if (!currentAgent) return;
+  const result = document.getElementById('scheduleResult');
+  result.textContent = 'Clearing...';
+  try {
+    const resp = await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/schedule`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schedule: null }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { result.textContent = 'Failed: ' + (data.error || 'unknown'); return; }
+    document.getElementById('scheduleWindows').innerHTML = '';
+    result.textContent = 'Cleared (24/7)';
+    setTimeout(() => { result.textContent = ''; }, 2000);
+  } catch (err) { result.textContent = 'Failed'; }
 }
 
 async function setInterval_() {
