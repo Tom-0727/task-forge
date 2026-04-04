@@ -34,8 +34,6 @@ Platform Server (单进程，单端口)
 │   ├── /api/agents/:name/status —— 单个 Agent 状态
 │   ├── /api/agents/:name/history —— 单个 Agent 邮箱历史
 │   ├── /api/agents/:name/send —— 向 Agent 发送消息
-│   ├── /api/agents/:name/pause —— 暂停 Agent
-│   ├── /api/agents/:name/resume —— 恢复 Agent
 │   ├── /api/agents/:name/stop —— 停止 Agent
 │   ├── /api/agents/create —— 启动新 Agent
 │   ├── /api/agents/import —— 导入已有 Agent
@@ -104,10 +102,9 @@ Platform Server (单进程，单端口)
 Agent 的实时状态不存储在 Registry 中，而是每次请求时从 Agent workdir 实时读取：
 
 - `Runtime/pid` → runner 进程是否存活
-- `Runtime/state` → running / stopped / paused
+- `Runtime/state` → running / stopped
 - `Runtime/last_heartbeat` → 最后心跳时间
 - `Runtime/awaiting_human` → 是否等待人类回复
-- `Runtime/manual_pause.json` → 是否手动暂停
 - `mailbox/MAILBOX.jsonl` → 最新消息摘要
 
 ## 4. Dashboard 页（Agent 列表 + Rate Limit 看板）
@@ -292,7 +289,6 @@ GET /api/agents
         "runner_pid": 12345,
         "last_heartbeat": "2026-03-30 14:20",
         "awaiting_human": false,
-        "manual_pause": false,
         "last_message": "Found 3 vulnerabilities in auth middleware..."
       }
     }
@@ -347,8 +343,6 @@ GET /api/agents/:name/status
 ```
 GET  /api/agents/:name/history?limit=50
 POST /api/agents/:name/send     {"message": "..."}
-POST /api/agents/:name/pause    {"reason": "..."}
-POST /api/agents/:name/resume
 POST /api/agents/:name/stop
 ```
 

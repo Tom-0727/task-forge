@@ -1,0 +1,363 @@
+#!/usr/bin/env bash
+# update-runtime — Update platform infrastructure files for a running agent
+# without touching agent-owned data (Memory, CLAUDE.md, mailbox history, etc.)
+#
+# Usage:
+#   ./update-runtime --workdir /abs/path/to/agent
+#   ./update-runtime --all                        # update all registered agents
+#   ./update-runtime --workdir /path --dry-run     # preview changes without writing
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SHARED_TEMPLATE_DIR="${SCRIPT_DIR}/shared"
+PROVIDER_TEMPLATE_ROOT="${SCRIPT_DIR}/providers"
+
+DRY_RUN=0
+UPDATE_ALL=0
+WORKDIR=""
+RESTART=0
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./update-runtime --workdir /abs/path/to/agent [--dry-run] [--restart]
+  ./update-runtime --all [--dry-run] [--restart]
+
+Options:
+  --workdir PATH   Path to a single agent workspace to update
+  --all            Update all agents registered in the platform registry
+  --dry-run        Show what would be updated without making changes
+  --restart        Restart the agent after updating (stop -> update -> start)
+  --help           Show this help
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --workdir)   WORKDIR="$2"; shift 2 ;;
+    --all)       UPDATE_ALL=1; shift ;;
+    --dry-run)   DRY_RUN=1; shift ;;
+    --restart)   RESTART=1; shift ;;
+    --help|-h)   usage; exit 0 ;;
+    *)           echo "Unknown argument: $1"; usage; exit 1 ;;
+  esac
+done
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+resolve_path() {
+  python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).expanduser().resolve())
+PY
+}
+
+detect_provider() {
+  local dir="$1"
+  if [[ -f "${dir}/run_claude.py" ]]; then
+    echo "claude"
+  elif [[ -f "${dir}/run_codex.mjs" ]]; then
+    echo "codex"
+  else
+    # fallback: check Runtime
+    local prov_file="${dir}/Runtime/runtime_provider"
+    if [[ -f "${prov_file}" ]]; then
+      cat "${prov_file}"
+    else
+      echo ""
+    fi
+  fi
+}
+
+provider_skill_root() {
+  case "$1" in
+    codex) echo ".agents" ;;
+    claude) echo ".claude" ;;
+  esac
+}
+
+read_agent_name() {
+  local dir="$1"
+  local name_file="${dir}/Runtime/agent_name"
+  if [[ -f "${name_file}" ]]; then
+    tr -d '\r' < "${name_file}"
+  else
+    basename "${dir}"
+  fi
+}
+
+# Re-render a template to a destination, preserving the agent's own variables
+render_template() {
+  local src="$1"
+  local dst="$2"
+  local agent_name="$3"
+  local rules_filename="$4"
+  local provider="$5"
+
+  SRC="$src" \
+  DST="$dst" \
+  AGENT_NAME="$agent_name" \
+  GOAL="" \
+  CREATED_AT="" \
+  CREATED_DATE="" \
+  RULES_FILENAME="$rules_filename" \
+  PROVIDER_SKILL_DIR="$(provider_skill_root "${provider}")/skills" \
+  python3 - <<'PY'
+from pathlib import Path
+import os
+
+src = Path(os.environ["SRC"])
+dst = Path(os.environ["DST"])
+content = src.read_text()
+
+for key in (
+    "AGENT_NAME",
+    "GOAL",
+    "CREATED_AT",
+    "CREATED_DATE",
+    "RULES_FILENAME",
+    "PROVIDER_SKILL_DIR",
+):
+    content = content.replace(f"{{{{{key}}}}}", os.environ[key])
+
+dst.parent.mkdir(parents=True, exist_ok=True)
+dst.write_text(content)
+PY
+}
+
+# Update a single file: render template -> compare -> overwrite if different
+update_file() {
+  local tmpl="$1"
+  local dest="$2"
+  local agent_name="$3"
+  local rules_filename="$4"
+  local provider="$5"
+
+  local tmp_file
+  tmp_file="$(mktemp)"
+  trap "rm -f '${tmp_file}'" RETURN
+
+  render_template "${tmpl}" "${tmp_file}" "${agent_name}" "${rules_filename}" "${provider}"
+
+  if [[ -f "${dest}" ]]; then
+    if diff -q "${tmp_file}" "${dest}" >/dev/null 2>&1; then
+      return 0  # no change
+    fi
+  fi
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    echo "  [would update] ${dest}"
+  else
+    cp "${tmp_file}" "${dest}"
+    echo "  [updated] ${dest}"
+  fi
+  return 0
+}
+
+# ── Core update logic for one agent ─────────────────────────────────
+
+update_one_agent() {
+  local dir="$1"
+
+  if [[ ! -d "${dir}" ]]; then
+    echo "ERROR: directory not found: ${dir}"
+    return 1
+  fi
+
+  local provider
+  provider="$(detect_provider "${dir}")"
+  if [[ -z "${provider}" ]]; then
+    echo "ERROR: cannot detect provider for ${dir}"
+    return 1
+  fi
+
+  local agent_name
+  agent_name="$(read_agent_name "${dir}")"
+
+  local rules_filename
+  case "${provider}" in
+    codex) rules_filename="AGENTS.md" ;;
+    claude) rules_filename="CLAUDE.md" ;;
+  esac
+
+  local skill_dir
+  skill_dir="$(provider_skill_root "${provider}")"
+  local provider_template_dir="${PROVIDER_TEMPLATE_ROOT}/${provider}"
+
+  echo "Updating agent: ${agent_name} (${dir})"
+  echo "  Provider: ${provider}"
+
+  # ── Shared infrastructure files ──
+  update_file "${SHARED_TEMPLATE_DIR}/mailbox_io.py.tmpl" \
+    "${dir}/mailbox_io.py" "${agent_name}" "${rules_filename}" "${provider}"
+
+  update_file "${SHARED_TEMPLATE_DIR}/mailbox_feishu_bridge.py.tmpl" \
+    "${dir}/mailbox_feishu_bridge.py" "${agent_name}" "${rules_filename}" "${provider}"
+
+  update_file "${SHARED_TEMPLATE_DIR}/web_ui_server.py.tmpl" \
+    "${dir}/web_ui_server.py" "${agent_name}" "${rules_filename}" "${provider}"
+
+  update_file "${SHARED_TEMPLATE_DIR}/stop-agent.sh.tmpl" \
+    "${dir}/stop-agent.sh" "${agent_name}" "${rules_filename}" "${provider}"
+
+  update_file "${SHARED_TEMPLATE_DIR}/status-agent.sh.tmpl" \
+    "${dir}/status-agent.sh" "${agent_name}" "${rules_filename}" "${provider}"
+
+  update_file "${SHARED_TEMPLATE_DIR}/mailbox_bridge.env.example.tmpl" \
+    "${dir}/mailbox_bridge.env.example" "${agent_name}" "${rules_filename}" "${provider}"
+
+  # ── Built-in skills (mailbox-operate) ──
+  update_file "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/SKILL.md.tmpl" \
+    "${dir}/${skill_dir}/skills/mailbox-operate/SKILL.md" "${agent_name}" "${rules_filename}" "${provider}"
+
+  update_file "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/send_mailbox.py.tmpl" \
+    "${dir}/${skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py" "${agent_name}" "${rules_filename}" "${provider}"
+
+  update_file "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/read_mailbox.py.tmpl" \
+    "${dir}/${skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py" "${agent_name}" "${rules_filename}" "${provider}"
+
+  # ── Provider-specific files ──
+  if [[ "${provider}" == "codex" ]]; then
+    update_file "${provider_template_dir}/run_codex.mjs.tmpl" \
+      "${dir}/run_codex.mjs" "${agent_name}" "${rules_filename}" "${provider}"
+
+    update_file "${provider_template_dir}/start-codex.sh.tmpl" \
+      "${dir}/start-codex.sh" "${agent_name}" "${rules_filename}" "${provider}"
+
+    update_file "${provider_template_dir}/package.json.tmpl" \
+      "${dir}/package.json" "${agent_name}" "${rules_filename}" "${provider}"
+  else
+    update_file "${provider_template_dir}/run_claude.py.tmpl" \
+      "${dir}/run_claude.py" "${agent_name}" "${rules_filename}" "${provider}"
+
+    update_file "${provider_template_dir}/start-claude.sh.tmpl" \
+      "${dir}/start-claude.sh" "${agent_name}" "${rules_filename}" "${provider}"
+
+    # Built-in agents (evaluator etc.)
+    if [[ -d "${provider_template_dir}/agents" ]]; then
+      for agent_tmpl in "${provider_template_dir}/agents/"*.md.tmpl; do
+        [[ -f "${agent_tmpl}" ]] || continue
+        local agent_basename
+        agent_basename="$(basename "${agent_tmpl}" .tmpl)"
+        update_file "${agent_tmpl}" \
+          "${dir}/${skill_dir}/agents/${agent_basename}" "${agent_name}" "${rules_filename}" "${provider}"
+      done
+    fi
+  fi
+
+  update_file "${provider_template_dir}/requirements.txt.tmpl" \
+    "${dir}/requirements.txt" "${agent_name}" "${rules_filename}" "${provider}"
+
+  # ── Fix permissions ──
+  if [[ "${DRY_RUN}" == "0" ]]; then
+    chmod +x "${dir}/stop-agent.sh" "${dir}/status-agent.sh" \
+      "${dir}/web_ui_server.py" \
+      "${dir}/${skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py" \
+      "${dir}/${skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py" \
+      2>/dev/null || true
+
+    if [[ "${provider}" == "codex" ]]; then
+      chmod +x "${dir}/run_codex.mjs" "${dir}/start-codex.sh" 2>/dev/null || true
+    else
+      chmod +x "${dir}/run_claude.py" "${dir}/start-claude.sh" 2>/dev/null || true
+    fi
+  fi
+
+  # ── Reinstall deps if requirements changed ──
+  if [[ "${DRY_RUN}" == "0" ]]; then
+    (
+      cd "${dir}"
+      uv venv --allow-existing >/dev/null 2>&1
+      uv pip install --python .venv/bin/python -r requirements.txt >/dev/null 2>&1
+    )
+    if [[ "${provider}" == "codex" ]]; then
+      ( cd "${dir}" && npm install --no-fund --no-audit >/dev/null 2>&1 )
+    fi
+  fi
+
+  # ── Restart if requested ──
+  if [[ "${RESTART}" == "1" && "${DRY_RUN}" == "0" ]]; then
+    echo "  Restarting agent..."
+    local interval
+    interval="$(cat "${dir}/Runtime/interval" 2>/dev/null || echo "20")"
+    ( cd "${dir}" && ./stop-agent.sh >/dev/null 2>&1 || true )
+    sleep 1
+    if [[ "${provider}" == "codex" ]]; then
+      ( cd "${dir}" && TASK_FORGE_SKIP_BRIDGE=1 ./start-codex.sh --interval "${interval}" >/dev/null )
+    else
+      ( cd "${dir}" && TASK_FORGE_SKIP_BRIDGE=1 ./start-claude.sh --interval "${interval}" >/dev/null )
+    fi
+    sleep 2
+    local pid
+    pid="$(cat "${dir}/Runtime/pid" 2>/dev/null || echo "")"
+    if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+      echo "  Agent restarted (PID: ${pid})"
+    else
+      echo "  WARNING: Agent may have failed to restart. Check logs."
+    fi
+  fi
+
+  echo "  Done."
+}
+
+# ── Main ─────────────────────────────────────────────────────────────
+
+if [[ "${UPDATE_ALL}" == "1" && -n "${WORKDIR}" ]]; then
+  echo "Error: --all and --workdir are mutually exclusive."
+  exit 1
+fi
+
+if [[ "${UPDATE_ALL}" == "0" && -z "${WORKDIR}" ]]; then
+  echo "Error: must specify --workdir or --all."
+  usage
+  exit 1
+fi
+
+if [[ "${DRY_RUN}" == "1" ]]; then
+  echo "=== DRY RUN — no files will be modified ==="
+  echo ""
+fi
+
+if [[ -n "${WORKDIR}" ]]; then
+  WORKDIR="$(resolve_path "${WORKDIR}")"
+  update_one_agent "${WORKDIR}"
+elif [[ "${UPDATE_ALL}" == "1" ]]; then
+  REGISTRY="${HOME}/.agent-platform/registry.json"
+  if [[ ! -f "${REGISTRY}" ]]; then
+    echo "No registry found at ${REGISTRY}. No agents to update."
+    exit 0
+  fi
+
+  # Extract all workdirs from registry
+  mapfile -t WORKDIRS < <(python3 -c "
+import json, sys
+data = json.load(open('${REGISTRY}'))
+for agent in data.get('agents', {}).values():
+    wd = agent.get('workdir', '')
+    if wd:
+        print(wd)
+")
+
+  if [[ ${#WORKDIRS[@]} -eq 0 ]]; then
+    echo "No agents found in registry."
+    exit 0
+  fi
+
+  echo "Found ${#WORKDIRS[@]} agent(s) to update."
+  echo ""
+
+  FAILED=0
+  for wd in "${WORKDIRS[@]}"; do
+    update_one_agent "${wd}" || FAILED=$((FAILED + 1))
+    echo ""
+  done
+
+  if [[ "${FAILED}" -gt 0 ]]; then
+    echo "${FAILED} agent(s) failed to update."
+    exit 1
+  fi
+
+  echo "All agents updated successfully."
+fi

@@ -25,7 +25,6 @@ const EVENTS_FILE = path.join(RUNTIME_DIR, "codex_events.jsonl");
 const MAILBOX = path.join(AGENT_DIR, "mailbox", "MAILBOX.jsonl");
 const AWAITING_FILE = path.join(RUNTIME_DIR, "awaiting_human");
 const PENDING_HUMAN_FILE = path.join(RUNTIME_DIR, "pending_human.json");
-const MANUAL_PAUSE_FILE = path.join(RUNTIME_DIR, "manual_pause.json");
 const INTERVAL_FILE = path.join(RUNTIME_DIR, "interval");
 const WORK_SCHEDULE_FILE = path.join(RUNTIME_DIR, "work_schedule.json");
 
@@ -299,25 +298,6 @@ function loadPendingHuman() {
   return data && typeof data === "object" ? data : null;
 }
 
-function manualPauseReason() {
-  const data = loadJsonFile(MANUAL_PAUSE_FILE);
-  if (data && typeof data === "object" && typeof data.reason === "string") {
-    return data.reason.trim();
-  }
-  return "";
-}
-
-function checkManualPause() {
-  if (!fileExists(MANUAL_PAUSE_FILE)) {
-    return false;
-  }
-  const reason = manualPauseReason();
-  const suffix = reason ? ` Reason: ${reason}` : "";
-  log(`Manual pause is active. Skipping heartbeat.${suffix}`);
-  writeText(STATE_FILE, "paused");
-  return true;
-}
-
 function clearPendingHumanIfUnchanged(expectedMailboxId) {
   if (!expectedMailboxId || !fileExists(PENDING_HUMAN_FILE)) {
     return;
@@ -353,17 +333,6 @@ async function sleepWithWakeup(minutes) {
     }
     if (fileExists(AWAITING_FILE) && hasNewHumanMessages()) {
       log("New human mailbox message detected while awaiting input. Waking immediately.");
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-}
-
-async function sleepWhilePaused(minutes) {
-  const totalSeconds = Math.max(0, minutes * 60);
-  for (let slept = 0; slept < totalSeconds && !shutdownRequested; slept += 1) {
-    if (!fileExists(MANUAL_PAUSE_FILE)) {
-      log("Manual pause cleared. Resuming heartbeat.");
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -698,11 +667,6 @@ async function main() {
   try {
     while (!shutdownRequested) {
       let interval = getInterval(args.interval);
-
-      if (checkManualPause()) {
-        await sleepWhilePaused(interval);
-        continue;
-      }
 
       if (checkWorkSchedule()) {
         await sleepUntilWorkWindow(loadWorkSchedule());

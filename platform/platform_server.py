@@ -275,49 +275,6 @@ def api_agent_send(name: str):
     return jsonify({"ok": True, "entry": entry})
 
 
-# ── API: Pause ───────────────────────────────────────────────────────────
-
-@app.route("/api/agents/<name>/pause", methods=["POST"])
-def api_agent_pause(name: str):
-    info, workdir = _resolve_agent(name)
-    if not info:
-        return jsonify({"error": "agent not found"}), 404
-    if not workdir:
-        return jsonify({"error": "workdir not found"}), 404
-
-    body = request.get_json(silent=True) or {}
-    reason = body.get("reason", "").strip()
-
-    runtime_dir = workdir / "Runtime"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "ts": _utcnow(),
-        "source": "platform",
-        "reason": reason,
-    }
-    (runtime_dir / "manual_pause.json").write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    return jsonify({"ok": True})
-
-
-# ── API: Resume ──────────────────────────────────────────────────────────
-
-@app.route("/api/agents/<name>/resume", methods=["POST"])
-def api_agent_resume(name: str):
-    info, workdir = _resolve_agent(name)
-    if not info:
-        return jsonify({"error": "agent not found"}), 404
-    if not workdir:
-        return jsonify({"error": "workdir not found"}), 404
-
-    pause_file = workdir / "Runtime" / "manual_pause.json"
-    if pause_file.exists():
-        pause_file.unlink(missing_ok=True)
-    return jsonify({"ok": True})
-
-
 # ── API: Set interval ────────────────────────────────────────────────────
 
 @app.route("/api/agents/<name>/interval", methods=["POST"])
@@ -486,9 +443,6 @@ def api_agent_stop(name: str):
             text=True,
             timeout=30,
         )
-        if result.returncode == 0:
-            pause_file = workdir / "Runtime" / "manual_pause.json"
-            pause_file.unlink(missing_ok=True)
         return jsonify({
             "ok": result.returncode == 0,
             "stdout": result.stdout[-500:] if result.stdout else "",

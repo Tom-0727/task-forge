@@ -36,7 +36,6 @@ SESSION_FILE = RUNTIME_DIR / "claude_session_id"
 LEGACY_SESSION_FILE = RUNTIME_DIR / "session_id"
 AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
 PENDING_HUMAN_FILE = RUNTIME_DIR / "pending_human.json"
-MANUAL_PAUSE_FILE = RUNTIME_DIR / "manual_pause.json"
 RATELIMIT_FILE = RUNTIME_DIR / "ratelimit.json"
 INTERVAL_FILE = RUNTIME_DIR / "interval"
 WORK_SCHEDULE_FILE = RUNTIME_DIR / "work_schedule.json"
@@ -141,28 +140,6 @@ def check_awaiting_human() -> bool:
     return False
 
 
-def read_manual_pause_reason() -> str:
-    if not MANUAL_PAUSE_FILE.exists():
-        return ""
-    try:
-        payload = json.loads(MANUAL_PAUSE_FILE.read_text())
-    except Exception:
-        return ""
-    if not isinstance(payload, dict):
-        return ""
-    return str(payload.get("reason", "")).strip()
-
-
-def check_manual_pause() -> bool:
-    if not MANUAL_PAUSE_FILE.exists():
-        return False
-    reason = read_manual_pause_reason()
-    suffix = f" Reason: {reason}" if reason else ""
-    log(f"Manual pause is active. Skipping heartbeat.{suffix}")
-    STATE_FILE.write_text("paused")
-    return True
-
-
 # ─── Session management ──────────────────────────────────────────────
 
 def load_session_id() -> str | None:
@@ -214,18 +191,6 @@ async def sleep_with_wakeup(minutes: int):
             log("New human mailbox message detected while awaiting input. Waking immediately.")
             return
 
-        await asyncio.sleep(1)
-        slept += 1
-
-
-async def sleep_while_paused(minutes: int):
-    total_seconds = max(0, minutes * 60)
-    slept = 0
-
-    while slept < total_seconds and not shutdown_requested:
-        if not MANUAL_PAUSE_FILE.exists():
-            log("Manual pause cleared. Resuming heartbeat.")
-            return
         await asyncio.sleep(1)
         slept += 1
 
@@ -494,10 +459,6 @@ async def main():
     try:
         while not shutdown_requested:
             interval = get_interval(args.interval)
-
-            if check_manual_pause():
-                await sleep_while_paused(interval)
-                continue
 
             if check_work_schedule():
                 await sleep_until_work_window(load_work_schedule())

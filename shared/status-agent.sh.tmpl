@@ -12,8 +12,6 @@ STATE_FILE="${RUNTIME_DIR}/state"
 INTERACTION_MODE_FILE="${RUNTIME_DIR}/interaction_mode"
 CLAUDE_SESSION_FILE="${RUNTIME_DIR}/claude_session_id"
 CODEX_THREAD_FILE="${RUNTIME_DIR}/codex_thread_id"
-MANUAL_PAUSE_FILE="${RUNTIME_DIR}/manual_pause.json"
-
 is_running() {
   local pid="$1"
   kill -0 "$pid" 2>/dev/null
@@ -62,5 +60,4 @@ codex_thread="$(read_value "$CODEX_THREAD_FILE")"
 
 echo "Claude session: ${claude_session:-none}"
 echo "Codex thread: ${codex_thread:-none}"
-echo "Manual pause: $([[ -f "$MANUAL_PAUSE_FILE" ]] && echo yes || echo no)"
 echo "Logs: ${RUNTIME_DIR}/claude.log, ${RUNTIME_DIR}/codex.log, ${RUNTIME_DIR}/codex_events.jsonl, ${RUNTIME_DIR}/mailbox-feishu-bridge.log, ${RUNTIME_DIR}/web-ui.log"

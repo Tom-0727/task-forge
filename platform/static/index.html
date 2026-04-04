@@ -476,7 +476,6 @@
       <span id="detailBadge" class="badge"></span>
       <div style="flex:1"></div>
       <button id="detailStartBtn" class="hidden" onclick="detailStart()">Start</button>
-      <button id="detailPauseBtn" onclick="detailTogglePause()">Pause</button>
       <button id="detailStopBtn" class="warn" onclick="detailStop()">Stop</button>
       <button class="warn" onclick="detailDelete()">Delete</button>
     </div>
@@ -637,13 +636,11 @@ function showImportModal() {
 function stateBadge(status) {
   if (!status) return { text: 'unknown', cls: 'off' };
   const s = status.state;
-  if (status.manual_pause) return { text: 'paused', cls: 'warn' };
   if (s === 'off_hours') return { text: 'off hours', cls: 'offhours' };
   if (status.awaiting_human) return { text: 'awaiting human', cls: 'wait' };
   if (s === 'running' && status.runner_alive) return { text: 'running', cls: 'on' };
   if (s === 'running') return { text: 'stale', cls: 'warn' };
   if (s === 'stopped') return { text: 'stopped', cls: 'off' };
-  if (s === 'paused') return { text: 'paused', cls: 'warn' };
   return { text: s || 'unknown', cls: 'off' };
 }
 
@@ -708,9 +705,7 @@ function renderAgentCards(agents) {
       <div class="agent-card-actions" onclick="event.stopPropagation()">
         ${badge.text === 'stopped' || badge.text === 'stale'
           ? `<button class="card-btn start" onclick="cardStart('${esc(agent.name)}')">Start</button>`
-          : `<button class="card-btn" onclick="cardAction('${esc(agent.name)}','pause')">Pause</button>
-             <button class="card-btn" onclick="cardAction('${esc(agent.name)}','resume')">Resume</button>
-             <button class="card-btn" onclick="cardAction('${esc(agent.name)}','stop')">Stop</button>`
+          : `<button class="card-btn" onclick="cardAction('${esc(agent.name)}','stop')">Stop</button>`
         }
         <button class="card-btn danger" onclick="cardDelete('${esc(agent.name)}')">Delete</button>
       </div>
@@ -732,8 +727,6 @@ function toggleCardMenu(e, name) {
   const dd = document.createElement('div');
   dd.className = 'dropdown';
   dd.innerHTML = `
-    <button class="dropdown-item" onclick="cardAction('${esc(name)}','pause')">Pause</button>
-    <button class="dropdown-item" onclick="cardAction('${esc(name)}','resume')">Resume</button>
     <button class="dropdown-item" onclick="cardAction('${esc(name)}','stop')">Stop</button>
     <button class="dropdown-item danger" onclick="cardDelete('${esc(name)}')">Delete</button>
   `;
@@ -745,9 +738,6 @@ async function cardAction(name, action) {
   closeAllDropdowns();
   const url = `/api/agents/${encodeURIComponent(name)}/${action}`;
   const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
-  if (action === 'pause') {
-    opts.body = JSON.stringify({ reason: 'paused from platform' });
-  }
   try {
     const resp = await fetch(url, opts);
     const data = await resp.json();
@@ -839,20 +829,10 @@ function renderDetailStatus(data) {
 
   const isStopped = badge.text === 'stopped' || badge.text === 'stale';
   const startBtn = document.getElementById('detailStartBtn');
-  const pauseBtn = document.getElementById('detailPauseBtn');
   const stopBtn = document.getElementById('detailStopBtn');
 
   startBtn.classList.toggle('hidden', !isStopped);
-  pauseBtn.classList.toggle('hidden', isStopped);
   stopBtn.classList.toggle('hidden', isStopped);
-
-  if (status.manual_pause) {
-    pauseBtn.textContent = 'Resume';
-    pauseBtn.className = '';
-  } else {
-    pauseBtn.textContent = 'Pause';
-    pauseBtn.className = 'warn';
-  }
 
   const facts = document.getElementById('detailFacts');
   facts.innerHTML = '';
@@ -861,11 +841,7 @@ function renderDetailStatus(data) {
     ['State', status.state || '-'],
     ['Runner PID', status.runner_pid || '-'],
     ['Awaiting Human', status.awaiting_human ? 'YES' : 'NO'],
-    ['Manual Pause', status.manual_pause ? 'YES' : 'NO'],
   ];
-  if (status.manual_pause_reason) {
-    items.push(['Pause Reason', status.manual_pause_reason]);
-  }
 
   // Update interval input only if not focused
   const intervalInput = document.getElementById('intervalInput');
@@ -1029,21 +1005,6 @@ async function setInterval_() {
     input.blur();
     setTimeout(() => { result.textContent = ''; }, 2000);
   } catch (err) { result.textContent = 'Failed'; }
-}
-
-async function detailTogglePause() {
-  if (!currentAgent) return;
-  const btn = document.getElementById('detailPauseBtn');
-  const isPaused = btn.textContent === 'Resume';
-  const action = isPaused ? 'resume' : 'pause';
-  const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
-  if (action === 'pause') {
-    opts.body = JSON.stringify({ reason: 'paused from platform' });
-  }
-  try {
-    await fetch(`/api/agents/${encodeURIComponent(currentAgent)}/${action}`, opts);
-    setTimeout(refreshDetail, 500);
-  } catch (err) { /* ignore */ }
 }
 
 async function detailStart() {

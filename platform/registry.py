@@ -184,17 +184,6 @@ def read_agent_status(workdir: str) -> dict:
     if state == "running" and not runner_alive:
         state = "stale"
 
-    # Manual pause
-    manual_pause = (runtime_dir / "manual_pause.json").exists()
-    pause_reason = ""
-    if manual_pause:
-        try:
-            p = json.loads((runtime_dir / "manual_pause.json").read_text(encoding="utf-8"))
-            if isinstance(p, dict):
-                pause_reason = str(p.get("reason", "")).strip()
-        except Exception:
-            pass
-
     # Last mailbox message
     last_message = ""
     mailbox_file = workdir_path / "mailbox" / "MAILBOX.jsonl"
@@ -217,8 +206,6 @@ def read_agent_status(workdir: str) -> dict:
         "runner_alive": runner_alive,
         "last_heartbeat": _format_ts(_read(runtime_dir / "last_heartbeat")),
         "awaiting_human": (runtime_dir / "awaiting_human").exists(),
-        "manual_pause": manual_pause,
-        "manual_pause_reason": pause_reason,
         "last_message": last_message,
     }
 

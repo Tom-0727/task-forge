@@ -24,7 +24,6 @@ PROVIDER_FILE = RUNTIME_DIR / "runtime_provider"
 STATE_FILE = RUNTIME_DIR / "state"
 HEARTBEAT_FILE = RUNTIME_DIR / "last_heartbeat"
 AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
-MANUAL_PAUSE_FILE = RUNTIME_DIR / "manual_pause.json"
 INTERACTION_MODE_FILE = RUNTIME_DIR / "interaction_mode"
 
 
@@ -72,14 +71,6 @@ def pid_status(path: Path) -> dict:
 
 def status_payload() -> dict:
     heartbeat = read_text(HEARTBEAT_FILE)
-    pause_reason = ""
-    if MANUAL_PAUSE_FILE.exists():
-        try:
-            pause_payload = json.loads(MANUAL_PAUSE_FILE.read_text(encoding="utf-8"))
-            if isinstance(pause_payload, dict):
-                pause_reason = str(pause_payload.get("reason", "")).strip()
-        except Exception:
-            pause_reason = ""
     return {
         "agent": "{{AGENT_NAME}}",
         "interaction_mode": read_text(INTERACTION_MODE_FILE) or "unknown",
@@ -90,8 +81,6 @@ def status_payload() -> dict:
         "web_ui": pid_status(WEB_UI_PID_FILE),
         "last_heartbeat": format_ts(heartbeat) if heartbeat else "none",
         "awaiting_human": AWAITING_FILE.exists(),
-        "manual_pause": MANUAL_PAUSE_FILE.exists(),
-        "manual_pause_reason": pause_reason,
     }
 
 
@@ -119,24 +108,6 @@ def write_pending_human(entry: dict) -> None:
         "source": "web-ui",
     }
     PENDING_HUMAN_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-
-def write_manual_pause(reason: str) -> dict:
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "ts": utcnow(),
-        "source": "web-ui",
-        "reason": reason,
-    }
-    MANUAL_PAUSE_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    return payload
-
-
-def clear_manual_pause() -> bool:
-    if not MANUAL_PAUSE_FILE.exists():
-        return False
-    MANUAL_PAUSE_FILE.unlink(missing_ok=True)
-    return True
 
 
 HTML = """<!doctype html>
@@ -374,7 +345,6 @@ HTML = """<!doctype html>
     }
     button:hover { filter: brightness(0.95); }
     button.warn { background: #9d4425; }
-    button.resume { background: #2f7a5f; }
     button:disabled { opacity: 0.7; cursor: not-allowed; }
     @media (max-width: 760px) {
       .status-grid { grid-template-columns: 1fr; }
@@ -396,7 +366,6 @@ HTML = """<!doctype html>
           Auto Sync
         </label>
         <span id="syncMeta" class="meta">Syncing...</span>
-        <button id="pauseBtn" class="warn" onclick="toggleHeartbeat()">Stop Heartbeat</button>
         <button onclick="refreshAll(true)">Refresh</button>
       </div>
     </header>
@@ -461,8 +430,6 @@ let statusBusy = false;
 let historyBusy = false;
 let lastStatusFingerprint = '';
 let lastHistoryFingerprint = '';
-let manualPauseOn = false;
-
 function nowText() {
   const d = new Date();
   return d.toLocaleTimeString();
@@ -491,17 +458,9 @@ function setProcess(prefix, processData) {
   document.getElementById(`${prefix}Meta`).textContent = `${pid} · ${state}`;
 }
 
-function setPauseButton(paused) {
-  manualPauseOn = Boolean(paused);
-  const btn = document.getElementById('pauseBtn');
-  btn.textContent = manualPauseOn ? 'Resume Heartbeat' : 'Stop Heartbeat';
-  btn.className = manualPauseOn ? 'resume' : 'warn';
-}
-
 function renderPills(data) {
   const items = [
     {label: 'Awaiting Human', on: Boolean(data.awaiting_human)},
-    {label: 'Manual Pause', on: Boolean(data.manual_pause)},
     {label: 'Runner Online', on: data.runner && data.runner.state === 'running'},
     {label: 'Bridge Online', on: data.bridge && data.bridge.state === 'running'},
     {label: 'UI Online', on: data.web_ui && data.web_ui.state === 'running'}
@@ -524,38 +483,11 @@ function statusFingerprint(data) {
     data.runtime_state || '',
     data.last_heartbeat || '',
     data.awaiting_human ? '1' : '0',
-    data.manual_pause ? '1' : '0',
     data.runner ? `${data.runner.state || ''}:${data.runner.pid || ''}` : '',
     data.bridge ? `${data.bridge.state || ''}:${data.bridge.pid || ''}` : '',
     data.web_ui ? `${data.web_ui.state || ''}:${data.web_ui.pid || ''}` : '',
   ];
   return parts.join('|');
-}
-
-async function toggleHeartbeat() {
-  const btn = document.getElementById('pauseBtn');
-  const targetPaused = !manualPauseOn;
-  btn.disabled = true;
-  try {
-    const path = targetPaused ? '/api/stop' : '/api/resume';
-    const options = {method: 'POST'};
-    if (targetPaused) {
-      options.headers = {'Content-Type': 'application/json'};
-      options.body = JSON.stringify({reason: 'paused from web UI'});
-    }
-    const resp = await fetch(path, options);
-    const data = await resp.json();
-    if (!resp.ok) {
-      setSyncMeta(`Action failed: ${data.error || 'request failed'}`);
-      return;
-    }
-    setSyncMeta(targetPaused ? 'Heartbeat paused' : 'Heartbeat resumed');
-    await refreshAll(true);
-  } catch (err) {
-    setSyncMeta('Action failed');
-  } finally {
-    btn.disabled = false;
-  }
 }
 
 async function loadStatus(force = false) {
@@ -577,7 +509,6 @@ async function loadStatus(force = false) {
     document.getElementById('provider').textContent = data.provider || '-';
     document.getElementById('runtimeState').textContent = data.runtime_state || '-';
     document.getElementById('heartbeatMeta').textContent = `Last heartbeat: ${data.last_heartbeat || 'none'}`;
-    setPauseButton(data.manual_pause);
     renderPills(data);
   } finally {
     statusBusy = false;
@@ -736,34 +667,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path == "/api/stop":
-            try:
-                size = int(self.headers.get("Content-Length", "0"))
-            except Exception:
-                size = 0
-            raw = self.rfile.read(size) if size > 0 else b"{}"
-            try:
-                payload = json.loads(raw.decode("utf-8"))
-            except Exception:
-                self._json({"error": "invalid json"}, 400)
-                return
-
-            reason = str(payload.get("reason", "")).strip() or "paused from web UI"
-            pause_payload = write_manual_pause(reason)
-            self._json({"ok": True, "manual_pause": True, "reason": pause_payload["reason"]})
-            return
-
-        if parsed.path == "/api/resume":
-            try:
-                size = int(self.headers.get("Content-Length", "0"))
-            except Exception:
-                size = 0
-            if size > 0:
-                _ = self.rfile.read(size)
-            cleared = clear_manual_pause()
-            self._json({"ok": True, "manual_pause": False, "changed": cleared})
-            return
-
         if parsed.path != "/api/send":
             self._json({"error": "not found"}, 404)
             return

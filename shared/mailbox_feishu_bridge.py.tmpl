@@ -37,7 +37,6 @@ BRIDGE_PID_FILE = RUNTIME_DIR / "bridge.pid"
 PROVIDER_FILE = RUNTIME_DIR / "runtime_provider"
 HEARTBEAT_FILE = RUNTIME_DIR / "last_heartbeat"
 AWAITING_FILE = RUNTIME_DIR / "awaiting_human"
-MANUAL_PAUSE_FILE = RUNTIME_DIR / "manual_pause.json"
 CLAUDE_SESSION_FILE = RUNTIME_DIR / "claude_session_id"
 CODEX_THREAD_FILE = RUNTIME_DIR / "codex_thread_id"
 CLAUDE_LOG_FILE = RUNTIME_DIR / "claude.log"
@@ -195,26 +194,12 @@ def append_command_audit(payload: dict) -> None:
         handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-def write_manual_pause(reason: str, sender_id: str, chat_id: str) -> None:
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "ts": utcnow(),
-        "source": "feishu_command",
-        "sender_id": sender_id,
-        "chat_id": chat_id,
-        "reason": reason,
-    }
-    MANUAL_PAUSE_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-
 def command_help_text() -> str:
     return (
         "{{AGENT_NAME}} bridge commands\n"
         "/help\n"
         "/status\n"
         "/history [N]\n"
-        "/pause [reason]\n"
-        "/resume\n"
         "Use //text to send a literal message starting with / to the agent."
     )
 
@@ -236,7 +221,6 @@ def command_status_text() -> str:
         session_value = short_id(read_text(CLAUDE_SESSION_FILE))
 
     pending = read_json_file(PENDING_HUMAN_FILE)
-    manual_pause = read_json_file(MANUAL_PAUSE_FILE)
 
     lines = [
         "{{AGENT_NAME}}",
@@ -246,10 +230,8 @@ def command_status_text() -> str:
         f"state: {runtime_state}",
         f"last heartbeat: {heartbeat_line}",
         f"awaiting_human: {'yes' if AWAITING_FILE.exists() else 'no'}",
-        f"manual_pause: {'yes' if MANUAL_PAUSE_FILE.exists() else 'no'}",
         f"session: {session_value}",
         f"pending_human: {pending.get('mailbox_id', 'none') if pending else 'none'}",
-        f"pause reason: {manual_pause.get('reason', 'none') if manual_pause else 'none'}",
     ]
 
     return "\n".join(lines)
@@ -282,17 +264,6 @@ def handle_bridge_command(text: str, sender_id: str, chat_id: str) -> tuple[bool
         except ValueError:
             limit = 5
         return (True, command_history_text(limit))
-
-    if command == "/pause":
-        reason = arg or "paused from Feishu"
-        write_manual_pause(reason, sender_id, chat_id)
-        return (True, f"Paused {{AGENT_NAME}}.\nReason: {reason}")
-
-    if command == "/resume":
-        if MANUAL_PAUSE_FILE.exists():
-            MANUAL_PAUSE_FILE.unlink(missing_ok=True)
-            return (True, f"Resumed {{AGENT_NAME}}.")
-        return (True, f"{{AGENT_NAME}} is not manually paused.")
 
     return (
         True,
