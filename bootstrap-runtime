@@ -500,7 +500,7 @@ ensure_workspace() {
 ensure_python_deps() {
   (
     cd "${WORKDIR}"
-    uv venv >/dev/null
+    uv venv --allow-existing >/dev/null
     uv pip install --python .venv/bin/python -r requirements.txt >/dev/null
   )
 }
@@ -519,7 +519,7 @@ ensure_node_deps() {
 seed_initial_goal() {
   local result
   result="$(
-    WORKDIR="${WORKDIR}" GOAL="${GOAL}" uv run --python "${WORKDIR}/.venv/bin/python" - <<'PY'
+    WORKDIR="${WORKDIR}" GOAL="${GOAL}" uv run --no-project --python "${WORKDIR}/.venv/bin/python" - <<'PY'
 from pathlib import Path
 import os
 import sys
@@ -616,7 +616,7 @@ start_web_ui() {
   fi
 
   rm -f "${web_ui_pid_file}"
-  nohup uv run --python "${python_bin}" "${web_ui_script}" --host "${WEB_UI_HOST}" --port "${WEB_UI_PORT}" >"${web_ui_log}" 2>&1 &
+  nohup uv run --no-project --python "${python_bin}" "${web_ui_script}" --host "${WEB_UI_HOST}" --port "${WEB_UI_PORT}" >"${web_ui_log}" 2>&1 &
   web_ui_pid="$!"
   echo "${web_ui_pid}" > "${web_ui_pid_file}"
 }

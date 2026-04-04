@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import signal
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 from registry import (
     get_agent,
@@ -26,12 +27,65 @@ from registry import (
 
 HARNESS_DIR = Path(__file__).resolve().parent.parent
 BOOTSTRAP_SCRIPT = HARNESS_DIR / "bootstrap-runtime"
+PLATFORM_DIR = Path(__file__).resolve().parent
+PLATFORM_ENV_FILE = PLATFORM_DIR / ".env"
 
 app = Flask(__name__, static_folder="static")
 
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _load_local_env(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and (
+            (value[0] == value[-1] == "'") or (value[0] == value[-1] == '"')
+        ):
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
+_load_local_env(PLATFORM_ENV_FILE)
+PLATFORM_PASSWORD = os.environ.get("PLATFORM_PASSWORD", "")
+AUTH_REALM = "Agent Platform"
+
+
+def _is_authenticated() -> bool:
+    auth = request.authorization
+    if not auth or auth.type.lower() != "basic":
+        return False
+    submitted_password = auth.password or ""
+    return secrets.compare_digest(submitted_password, PLATFORM_PASSWORD)
+
+
+def _auth_required_response() -> Response:
+    return Response(
+        "Unauthorized",
+        401,
+        {"WWW-Authenticate": f'Basic realm="{AUTH_REALM}"'},
+    )
+
+
+@app.before_request
+def _require_auth():
+    if _is_authenticated():
+        return None
+    return _auth_required_response()
 
 
 # ── Mailbox helpers (inline, no dependency on agent's mailbox_io.py) ──────
@@ -362,6 +416,9 @@ def api_agent_stop(name: str):
             text=True,
             timeout=30,
         )
+        if result.returncode == 0:
+            pause_file = workdir / "Runtime" / "manual_pause.json"
+            pause_file.unlink(missing_ok=True)
         return jsonify({
             "ok": result.returncode == 0,
             "stdout": result.stdout[-500:] if result.stdout else "",
@@ -557,6 +614,13 @@ def api_ratelimit():
 
 def main():
     import argparse
+
+    if not PLATFORM_PASSWORD:
+        print(
+            f"PLATFORM_PASSWORD is not set. Configure it in {PLATFORM_ENV_FILE}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     parser = argparse.ArgumentParser(description="Agent Platform Server")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")

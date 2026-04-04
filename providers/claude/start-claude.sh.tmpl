@@ -59,7 +59,7 @@ start_bridge_if_configured() {
 
   nohup bash -c '
     while true; do
-      uv run --python "'"${PYTHON_BIN}"'" "'"${AGENT_DIR}"'/mailbox_feishu_bridge.py" >>"'"${BRIDGE_LOG}"'" 2>&1
+      uv run --no-project --python "'"${PYTHON_BIN}"'" "'"${AGENT_DIR}"'/mailbox_feishu_bridge.py" >>"'"${BRIDGE_LOG}"'" 2>&1
       printf "[%s] [bridge-supervisor] bridge exited, restarting in 5s.\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"'"${BRIDGE_LOG}"'"
       sleep 5
     done
@@ -114,7 +114,7 @@ fi
 
 start_bridge_if_configured
 
-nohup uv run --python "${PYTHON_BIN}" "${AGENT_DIR}/run_claude.py" "$@" >"${RUNNER_LOG}" 2>&1 &
+nohup uv run --no-project --python "${PYTHON_BIN}" "${AGENT_DIR}/run_claude.py" "$@" >"${RUNNER_LOG}" 2>&1 &
 launcher_pid="$!"
 
 for _ in $(seq 1 20); do
