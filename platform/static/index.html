@@ -116,29 +116,23 @@
     .badge.offhours { background: var(--offhours-bg); color: var(--offhours-fg); }
 
     /* ── Rate Limit ── */
-    .rl-bar-wrap {
-      background: var(--off-bg);
-      border-radius: 8px;
-      height: 22px;
-      overflow: hidden;
-      position: relative;
-    }
-    .rl-bar {
-      height: 100%;
-      border-radius: 8px;
-      transition: width 0.4s ease;
-    }
-    .rl-bar.ok { background: var(--accent); }
-    .rl-bar.warning { background: #e6a817; }
-    .rl-bar.danger { background: #c0392b; }
-    .rl-text {
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
+    .rl-status-row {
       display: flex;
       align-items: center;
-      justify-content: center;
-      font-size: 11px;
-      font-weight: 700;
+      gap: 10px;
+    }
+    .rl-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .rl-dot.ok { background: var(--accent); }
+    .rl-dot.warning { background: #e6a817; }
+    .rl-dot.danger { background: #c0392b; }
+    .rl-status-label {
+      font-size: 0.85rem;
+      font-weight: 600;
       color: var(--ink);
     }
     .rl-meta {
@@ -448,9 +442,9 @@
         <h2>Claude Rate Limit</h2>
         <span id="rlSource" class="meta"></span>
       </div>
-      <div class="rl-bar-wrap">
-        <div id="rlBar" class="rl-bar ok" style="width: 0%"></div>
-        <div id="rlText" class="rl-text">--</div>
+      <div class="rl-status-row">
+        <div id="rlDot" class="rl-dot ok"></div>
+        <span id="rlStatusLabel" class="rl-status-label">--</span>
       </div>
       <div class="rl-meta">
         <span id="rlType"></span>
@@ -783,14 +777,20 @@ function renderRateLimit(data) {
   }
   panel.classList.remove('hidden');
   const cl = data.claude;
-  const pct = Math.round((cl.utilization || 0) * 100);
+  const status = cl.status || 'unknown';
 
-  const bar = document.getElementById('rlBar');
-  bar.style.width = pct + '%';
-  bar.className = 'rl-bar ' + (pct >= 90 ? 'danger' : pct >= 70 ? 'warning' : 'ok');
+  const statusMap = {
+    'allowed':         { css: 'ok',      label: 'Normal' },
+    'allowed_warning': { css: 'warning', label: 'Approaching Limit' },
+    'rejected':        { css: 'danger',  label: 'Rate Limited' },
+  };
+  const mapped = statusMap[status] || { css: 'ok', label: status };
 
-  document.getElementById('rlText').textContent = pct + '% used';
-  document.getElementById('rlType').textContent = cl.rate_limit_type ? `Window: ${cl.rate_limit_type}` : '';
+  document.getElementById('rlDot').className = 'rl-dot ' + mapped.css;
+  document.getElementById('rlStatusLabel').textContent = mapped.label;
+
+  const typeText = cl.rate_limit_type ? `Window: ${cl.rate_limit_type.replace(/_/g, ' ')}` : '';
+  document.getElementById('rlType').textContent = typeText;
 
   let resetText = '';
   if (cl.resets_at) {
