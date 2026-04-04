@@ -11,6 +11,7 @@ usage() {
 Usage:
   ./bootstrap-runtime \
     --goal "Goal text" \
+    --first-instruction "First instruction text" \
     --provider codex|claude \
     --interaction feishu|web-ui|platform \
     --interval 20 \
@@ -28,6 +29,7 @@ Web UI mode only:
 Example:
   ./bootstrap-runtime \
     --goal "Goal text" \
+    --first-instruction "First instruction text" \
     --provider codex \
     --interaction feishu \
     --interval 20 \
@@ -45,6 +47,7 @@ USAGE
 
 GOAL=""
 GOAL_FILE=""
+FIRST_INSTRUCTION=""
 PROVIDER=""
 INTERACTION=""
 INTERVAL=""
@@ -164,6 +167,11 @@ write_runtime_agent_name() {
   local name="$1"
   mkdir -p "${WORKDIR}/Runtime"
   printf '%s\n' "${name}" > "${WORKDIR}/Runtime/agent_name"
+}
+
+write_runtime_goal() {
+  mkdir -p "${WORKDIR}/Runtime"
+  printf '%s\n' "${GOAL}" > "${WORKDIR}/Runtime/goal"
 }
 
 render_template() {
@@ -516,16 +524,16 @@ ensure_node_deps() {
   )
 }
 
-seed_initial_goal() {
+seed_initial_instruction() {
   local result
   result="$(
-    WORKDIR="${WORKDIR}" GOAL="${GOAL}" uv run --no-project --python "${WORKDIR}/.venv/bin/python" - <<'PY'
+    WORKDIR="${WORKDIR}" FIRST_INSTRUCTION="${FIRST_INSTRUCTION}" uv run --no-project --python "${WORKDIR}/.venv/bin/python" - <<'PY'
 from pathlib import Path
 import os
 import sys
 
 root = Path(os.environ["WORKDIR"])
-goal = os.environ["GOAL"].strip()
+first_instruction = os.environ["FIRST_INSTRUCTION"].strip()
 
 sys.path.insert(0, str(root))
 from mailbox_io import append_message, read_messages
@@ -543,8 +551,8 @@ else:
     append_message(
         mailbox_path,
         role="human",
-        task_id="task.user.goal",
-        message=goal,
+        task_id="task.user.initial_instruction",
+        message=first_instruction,
     )
     print("seeded")
 PY
@@ -627,6 +635,10 @@ while [[ $# -gt 0 ]]; do
       GOAL="$2"
       shift 2
       ;;
+    --first-instruction)
+      FIRST_INSTRUCTION="$2"
+      shift 2
+      ;;
     --goal-file)
       GOAL_FILE="$2"
       shift 2
@@ -700,6 +712,11 @@ if [[ -z "${GOAL//[[:space:]]/}" ]]; then
   exit 1
 fi
 
+if [[ -z "${FIRST_INSTRUCTION//[[:space:]]/}" ]]; then
+  echo "Error: --first-instruction is required."
+  exit 1
+fi
+
 if [[ "${PROVIDER}" != "codex" && "${PROVIDER}" != "claude" ]]; then
   echo "Error: --provider must be codex or claude."
   exit 1
@@ -747,6 +764,7 @@ WORKDIR="$(resolve_path "${WORKDIR}")"
 
 ensure_template_sources
 ensure_workspace
+write_runtime_goal
 if [[ "${INTERACTION}" == "feishu" ]]; then
   write_feishu_env
 elif [[ "${INTERACTION}" == "platform" && -n "${FEISHU_APP_ID}" ]]; then
@@ -756,7 +774,7 @@ write_interaction_mode
 ensure_python_deps
 ensure_node_deps
 
-GOAL_STATUS="$(seed_initial_goal)"
+GOAL_STATUS="$(seed_initial_instruction)"
 
 # Determine whether to skip the feishu bridge
 SKIP_BRIDGE=0
@@ -797,7 +815,7 @@ echo "Agent name: ${RUNTIME_AGENT_NAME}"
 echo "Provider: ${PROVIDER}"
 echo "Interaction: ${INTERACTION}"
 echo "Interval: ${INTERVAL}"
-echo "Goal seeded: ${GOAL_STATUS}"
+echo "Initial instruction seeded: ${GOAL_STATUS}"
 echo "Runner PID: $(read_pid_file "${WORKDIR}/Runtime/pid")"
 if [[ "${INTERACTION}" == "feishu" || ( "${INTERACTION}" == "platform" && -n "${FEISHU_APP_ID}" ) ]]; then
   echo "Bridge PID: $(read_pid_file "${WORKDIR}/Runtime/bridge.pid")"

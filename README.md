@@ -7,11 +7,12 @@ Based on the design spec in [DESIGNS.md](./DESIGNS.md).
 ## Quick Start
 
 Single deployment entrypoint: `bootstrap-runtime`.
-One command creates workspace, installs deps, seeds goal, and starts runtime.
+One command creates workspace, installs deps, seeds goal plus first instruction, and starts runtime.
 
 ```bash
 ./bootstrap-runtime \
   --goal "检查自己的所有机制是否正常，检查 skills 机制是否有 mailbox-operate 和 skill-creator；另外检查 Subagent机制是否可正常使用" \
+  --first-instruction "先检查当前 workspace 的关键机制是否正常，并把发现的问题按优先级写进 mailbox" \
   --agent-name "SelfCheckBotCc" \
   --provider codex \
   --interaction web-ui \
@@ -87,6 +88,7 @@ It requires an explicit interaction mode:
 ```bash
 ./bootstrap-runtime \
   --goal "Goal text" \
+  --first-instruction "First instruction text" \
   --agent-name "ResearchBot" \
   --provider codex|claude \
   --interaction feishu|web-ui \
@@ -99,6 +101,8 @@ Rules:
 - `--interaction feishu`: requires `--feishu-app-id`, `--feishu-app-secret`, `--feishu-chat-id`
 - `--interaction web-ui`: must not include Feishu arguments
 - Feishu and Web UI are mutually exclusive in one runtime launch
+- `--goal` is the long-lived objective written into `AGENTS.md` / `CLAUDE.md`
+- `--first-instruction` is the first concrete human instruction seeded into `mailbox/MAILBOX.jsonl`
 - `--agent-name` is optional for first-time workspace creation; if omitted, it defaults to `basename(workdir)`
 - If `workdir` already exists, `--agent-name` is ignored and the existing workspace identity is reused
 

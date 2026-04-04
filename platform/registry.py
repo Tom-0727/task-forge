@@ -121,21 +121,14 @@ def import_agent(workdir: str, tags: list[str] | None = None) -> dict | None:
     else:
         interaction = "unknown"
 
-    # Try to read goal from mailbox
+    # Read goal from runtime metadata
     goal = ""
-    mailbox_file = workdir_path / "mailbox" / "MAILBOX.jsonl"
-    if mailbox_file.exists():
-        for line in mailbox_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if msg.get("task_id") == "task.user.goal":
-                goal = msg.get("message", "")
-                break
+    goal_file = runtime_dir / "goal"
+    if goal_file.exists():
+        try:
+            goal = goal_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            goal = ""
 
     return register_agent(
         name=name,

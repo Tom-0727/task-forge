@@ -490,6 +490,7 @@ def api_agents_create():
     body = request.get_json(silent=True) or {}
 
     goal = body.get("goal", "").strip()
+    first_instruction = body.get("first_instruction", "").strip()
     provider = body.get("provider", "").strip()
     workdir = body.get("workdir", "").strip()
     interval = body.get("interval", 20)
@@ -498,6 +499,8 @@ def api_agents_create():
 
     if not goal:
         return jsonify({"error": "goal is required"}), 400
+    if not first_instruction:
+        return jsonify({"error": "first_instruction is required"}), 400
     if provider not in ("claude", "codex"):
         return jsonify({"error": "provider must be claude or codex"}), 400
     if not workdir:
@@ -509,6 +512,7 @@ def api_agents_create():
     cmd = [
         str(BOOTSTRAP_SCRIPT),
         "--goal", goal,
+        "--first-instruction", first_instruction,
         "--provider", provider,
         "--interaction", "platform",
         "--interval", str(interval),

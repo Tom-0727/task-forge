@@ -536,6 +536,10 @@
       <textarea id="createGoal" placeholder="Agent's task goal" style="min-height:60px"></textarea>
     </div>
     <div class="form-group">
+      <label>First Instruction *</label>
+      <textarea id="createFirstInstruction" placeholder="Agent's first concrete instruction" style="min-height:80px"></textarea>
+    </div>
+    <div class="form-group">
       <label>Provider *</label>
       <select id="createProvider">
         <option value="claude">Claude</option>
@@ -1083,14 +1087,15 @@ async function doCreate() {
   result.textContent = 'Creating...';
 
   const goal = document.getElementById('createGoal').value.trim();
+  const firstInstruction = document.getElementById('createFirstInstruction').value.trim();
   const provider = document.getElementById('createProvider').value;
   const workdir = document.getElementById('createWorkdir').value.trim();
   const agentName = document.getElementById('createAgentName').value.trim();
   const interval = parseInt(document.getElementById('createInterval').value) || 20;
   const tags = document.getElementById('createTags').value.split(',').map(s => s.trim()).filter(Boolean);
 
-  if (!goal || !workdir) {
-    result.textContent = 'Goal and workdir are required';
+  if (!goal || !firstInstruction || !workdir) {
+    result.textContent = 'Goal, first instruction, and workdir are required';
     return;
   }
 
@@ -1098,7 +1103,15 @@ async function doCreate() {
     const resp = await fetch('/api/agents/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goal, provider, workdir, agent_name: agentName, interval, tags }),
+      body: JSON.stringify({
+        goal,
+        first_instruction: firstInstruction,
+        provider,
+        workdir,
+        agent_name: agentName,
+        interval,
+        tags,
+      }),
     });
     const data = await resp.json();
     if (!resp.ok) {
