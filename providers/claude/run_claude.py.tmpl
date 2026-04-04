@@ -261,12 +261,11 @@ async def invoke_agent(prompt: str, max_turns: int, max_budget: float) -> str | 
                 "ts": utcnow(),
                 "provider": "claude",
                 "status": info.status,
-                "utilization": info.utilization,
                 "resets_at": info.resets_at,
                 "rate_limit_type": info.rate_limit_type,
             }
             RATELIMIT_FILE.write_text(json.dumps(ratelimit))
-            log(f"Rate limit: {info.status} ({info.utilization})")
+            log(f"Rate limit: {info.status} (type={info.rate_limit_type})")
 
         if isinstance(message, AssistantMessage):
             for block in message.content:

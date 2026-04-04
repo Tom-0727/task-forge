@@ -8,12 +8,14 @@
 # 代码风格
 - 永远不要使用兼容代码，必要时请与用户沟通
 
+# 执行规范
+- 每当对Harness做了更新，应该检查是否需要同步更新到已部署的 Agents（可以用./update-runtime），然后获得用户批准
+
 # 回复风格
 - Default to concise, high-signal answers.
 - Start with the conclusion in the first sentence.
 - For simple requests, answer in 1 short paragraph or at most 3 bullets.
-- For non-trivial requests, answer in at most 6 bullets or 8 sentences unless the user asks for
-detail.
+- For non-trivial requests, answer in at most 6 bullets or 8 sentences unless the user asks for detail.
 - Do not use filler, praise, apologies, or conversational padding.
 - Do not restate the user's request.
 - Do not explain basic concepts unless asked.

@@ -630,7 +630,6 @@ def api_ratelimit():
         if latest_claude is None or rl.get("ts", "") > latest_claude.get("last_updated", ""):
             latest_claude = {
                 "status": rl.get("status"),
-                "utilization": rl.get("utilization"),
                 "resets_at": rl.get("resets_at"),
                 "rate_limit_type": rl.get("rate_limit_type"),
                 "last_updated": rl.get("ts"),
