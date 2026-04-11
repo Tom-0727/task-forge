@@ -5,14 +5,18 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import secrets
 import signal
 import subprocess
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 
 from registry import (
     get_agent,
@@ -210,6 +214,233 @@ def _resolve_agent(name: str):
     if not workdir.exists():
         return info, None
     return info, workdir
+
+
+# ── Aggregate helpers ────────────────────────────────────────────────────
+
+_OVERVIEW_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="overview")
+
+
+def _load_agent_snapshot(name: str, info: dict) -> dict:
+    """Read status + contacts for one agent. Called in a worker thread."""
+    workdir_str = info.get("workdir", "")
+    workdir = Path(workdir_str) if workdir_str else None
+    status = read_agent_status(workdir_str) if workdir and workdir.exists() else {}
+    contacts_list: list[dict] = []
+    if workdir and workdir.exists():
+        raw = _load_contacts(workdir)
+        for cname, cinfo in raw.items():
+            contacts_list.append({
+                "name": cname,
+                "type": cinfo.get("type", "unknown"),
+                "connected_at": cinfo.get("connected_at", ""),
+            })
+    return {
+        **info,
+        "status": status,
+        "contacts": contacts_list,
+    }
+
+
+def _build_overview() -> dict:
+    """Aggregate dashboard payload: agents + connections + usage."""
+    agents_map = list_agents()
+    items = list(agents_map.items())
+
+    snapshots = list(_OVERVIEW_POOL.map(
+        lambda pair: _load_agent_snapshot(pair[0], pair[1]),
+        items,
+    ))
+
+    # Derive deduped agent-to-agent connections.
+    conn_map: dict[str, dict] = {}
+    for snap in snapshots:
+        owner = snap.get("name", "")
+        for c in snap.get("contacts", []):
+            if c.get("type") != "agent":
+                continue
+            other = c.get("name", "")
+            if not owner or not other:
+                continue
+            a, b = sorted([owner, other])
+            key = f"{a}<->{b}"
+            if key not in conn_map:
+                conn_map[key] = {"a": a, "b": b}
+
+    return {
+        "agents": snapshots,
+        "connections": list(conn_map.values()),
+        "usage": get_usage(),
+        "revision": _events_revision(),
+    }
+
+
+def _read_history(workdir: Path, contact: str, limit: int, since_id: str = "") -> list[dict]:
+    contacts = _load_contacts(workdir)
+    contact_info = contacts.get(contact)
+    if not contact_info:
+        return []
+    mailbox_path = workdir / "mailbox" / contact_info["mailbox_file"]
+    messages = _read_mailbox(mailbox_path)
+
+    if since_id:
+        cut = -1
+        for idx, msg in enumerate(messages):
+            if str(msg.get("id", "")) == since_id:
+                cut = idx
+                break
+        if cut >= 0:
+            messages = messages[cut + 1:]
+
+    rendered: list[dict] = []
+    for msg in messages[-limit:]:
+        rendered.append({
+            "id": str(msg.get("id", "")),
+            "ts": _format_ts(str(msg.get("ts", ""))),
+            "from": str(msg.get("from", msg.get("role", ""))),
+            "to": str(msg.get("to", "")),
+            "task_id": str(msg.get("task_id", "")),
+            "message": str(msg.get("message", "")),
+        })
+    return rendered
+
+
+# ── Event bus (SSE) ──────────────────────────────────────────────────────
+
+_EVENT_POLL_INTERVAL = 0.5  # seconds
+_event_subscribers_lock = threading.Lock()
+_event_subscribers: list[queue.Queue] = []
+_event_revision_lock = threading.Lock()
+_event_revision = 0
+_event_watcher_started = False
+_event_watcher_started_lock = threading.Lock()
+
+
+def _events_revision() -> int:
+    with _event_revision_lock:
+        return _event_revision
+
+
+def _bump_revision() -> int:
+    global _event_revision
+    with _event_revision_lock:
+        _event_revision += 1
+        return _event_revision
+
+
+def _publish_event(event: dict) -> None:
+    rev = _bump_revision()
+    event = {**event, "revision": rev}
+    with _event_subscribers_lock:
+        dead: list[queue.Queue] = []
+        for q in _event_subscribers:
+            try:
+                q.put_nowait(event)
+            except queue.Full:
+                dead.append(q)
+        for q in dead:
+            try:
+                _event_subscribers.remove(q)
+            except ValueError:
+                pass
+
+
+def _subscribe_events() -> queue.Queue:
+    q: queue.Queue = queue.Queue(maxsize=128)
+    with _event_subscribers_lock:
+        _event_subscribers.append(q)
+    return q
+
+
+def _unsubscribe_events(q: queue.Queue) -> None:
+    with _event_subscribers_lock:
+        try:
+            _event_subscribers.remove(q)
+        except ValueError:
+            pass
+
+
+def _scan_watch_targets() -> dict[str, dict]:
+    """Return {agent_name: {status: mtime, mailboxes: {file: mtime}}}."""
+    out: dict[str, dict] = {}
+    for name, info in list_agents().items():
+        workdir_str = info.get("workdir", "")
+        if not workdir_str:
+            continue
+        workdir = Path(workdir_str)
+        if not workdir.exists():
+            continue
+        runtime_dir = workdir / "Runtime"
+        entry: dict = {"state": 0.0, "heartbeat": 0.0, "pid": 0.0, "mailboxes": {}}
+        for key, rel in (("state", "state"), ("heartbeat", "last_heartbeat"), ("pid", "pid")):
+            p = runtime_dir / rel
+            try:
+                entry[key] = p.stat().st_mtime if p.exists() else 0.0
+            except OSError:
+                entry[key] = 0.0
+        mailbox_dir = workdir / "mailbox"
+        if mailbox_dir.exists():
+            try:
+                for f in mailbox_dir.iterdir():
+                    if f.suffix == ".jsonl":
+                        try:
+                            entry["mailboxes"][f.name] = f.stat().st_mtime
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+        out[name] = entry
+    return out
+
+
+def _diff_targets(prev: dict, curr: dict) -> tuple[set[str], bool]:
+    """Return (changed_agent_names, roster_changed)."""
+    changed: set[str] = set()
+    roster_changed = set(prev.keys()) != set(curr.keys())
+    for name, snap in curr.items():
+        old = prev.get(name)
+        if old is None:
+            changed.add(name)
+            continue
+        if (
+            old.get("state") != snap.get("state")
+            or old.get("heartbeat") != snap.get("heartbeat")
+            or old.get("pid") != snap.get("pid")
+            or old.get("mailboxes") != snap.get("mailboxes")
+        ):
+            changed.add(name)
+    for name in prev.keys():
+        if name not in curr:
+            changed.add(name)
+    return changed, roster_changed
+
+
+def _event_watcher_loop() -> None:
+    prev = _scan_watch_targets()
+    while True:
+        time.sleep(_EVENT_POLL_INTERVAL)
+        try:
+            curr = _scan_watch_targets()
+        except Exception:
+            continue
+        changed, roster_changed = _diff_targets(prev, curr)
+        if roster_changed:
+            _publish_event({"type": "dirty", "scope": "overview"})
+        for name in changed:
+            _publish_event({"type": "dirty", "scope": "agent", "name": name})
+        if changed and not roster_changed:
+            _publish_event({"type": "dirty", "scope": "overview"})
+        prev = curr
+
+
+def _start_event_watcher() -> None:
+    global _event_watcher_started
+    with _event_watcher_started_lock:
+        if _event_watcher_started:
+            return
+        _event_watcher_started = True
+    thread = threading.Thread(target=_event_watcher_loop, name="event-watcher", daemon=True)
+    thread.start()
 
 
 # ── Frontend ──────────────────────────────────────────────────────────────
@@ -745,6 +976,84 @@ def api_mailbox_disconnect():
     return jsonify({"ok": True})
 
 
+# ── API: Aggregate overview (dashboard single-shot) ─────────────────────
+
+@app.route("/api/overview")
+def api_overview():
+    return jsonify(_build_overview())
+
+
+# ── API: Aggregate detail (single-shot agent page) ──────────────────────
+
+@app.route("/api/agents/<name>/detail")
+def api_agent_detail(name: str):
+    info, workdir = _resolve_agent(name)
+    if not info:
+        return jsonify({"error": "agent not found"}), 404
+    if not workdir:
+        return jsonify({"error": "workdir not found"}), 404
+
+    limit = request.args.get("limit", 50, type=int)
+    contact = request.args.get("contact", "human")
+    since_id = request.args.get("since_id", "", type=str)
+
+    status = read_agent_status(str(workdir))
+    contacts_raw = _load_contacts(workdir)
+    contacts_list = [
+        {
+            "name": cname,
+            "type": cinfo.get("type", "unknown"),
+            "connected_at": cinfo.get("connected_at", ""),
+        }
+        for cname, cinfo in contacts_raw.items()
+    ]
+
+    messages = _read_history(workdir, contact, limit, since_id)
+
+    schedule_file = workdir / "Runtime" / "work_schedule.json"
+    schedule: dict | None = None
+    if schedule_file.exists():
+        try:
+            schedule = json.loads(schedule_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            schedule = None
+
+    return jsonify({
+        **info,
+        "status": status,
+        "contacts": contacts_list,
+        "messages": messages,
+        "schedule": schedule,
+        "history_contact": contact,
+        "revision": _events_revision(),
+    })
+
+
+# ── API: SSE event stream ────────────────────────────────────────────────
+
+@app.route("/api/events")
+def api_events():
+    def generate():
+        q = _subscribe_events()
+        try:
+            # Greeting event so the client sees the connection is live.
+            yield f"event: hello\ndata: {json.dumps({'revision': _events_revision()})}\n\n"
+            while True:
+                try:
+                    event = q.get(timeout=25)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except queue.Empty:
+                    # Heartbeat comment keeps proxies from closing the stream.
+                    yield ": keepalive\n\n"
+        finally:
+            _unsubscribe_events(q)
+
+    response = Response(stream_with_context(generate()), mimetype="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
+
+
 # ── API: LLM usage (Claude + Codex) ─────────────────────────────────────
 
 @app.route("/api/usage")
@@ -772,7 +1081,8 @@ def main():
 
     print(f"Agent Platform starting on http://{args.host}:{args.port}")
     start_usage_refresher()
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    _start_event_watcher()
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
 
 
 if __name__ == "__main__":
