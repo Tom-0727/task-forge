@@ -472,11 +472,14 @@ function secondsUntilNextWindow(schedule) {
 async function sleepUntilWorkWindow(schedule) {
   const waitSeconds = secondsUntilNextWindow(schedule);
   log(`Off hours. Sleeping ${Math.floor(waitSeconds / 60)} minutes until next work window.`);
+  let pendingLogged = false;
 
   for (let slept = 0; slept < waitSeconds && !shutdownRequested; slept += 1) {
     if (hasAnyPending()) {
-      log("Message received during off hours. Waking immediately.");
-      return;
+      if (!pendingLogged) {
+        log("Message received during off hours. Queued until next work window.");
+        pendingLogged = true;
+      }
     }
     if (slept > 0 && slept % 60 === 0) {
       const fresh = loadWorkSchedule();

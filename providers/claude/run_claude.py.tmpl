@@ -399,15 +399,17 @@ def seconds_until_next_window(schedule: dict) -> int:
 
 
 async def sleep_until_work_window(schedule: dict):
-    """Sleep until the next work window opens, waking on human messages."""
+    """Sleep until the next work window opens and queue messages for later processing."""
     wait_seconds = seconds_until_next_window(schedule)
     log(f"Off hours. Sleeping {wait_seconds // 60} minutes until next work window.")
 
     slept = 0
+    pending_logged = False
     while slept < wait_seconds and not shutdown_requested:
         if has_any_pending():
-            log("Message received during off hours. Waking immediately.")
-            return
+            if not pending_logged:
+                log("Message received during off hours. Queued until next work window.")
+                pending_logged = True
         # Re-check schedule every 60s in case file was updated
         if slept > 0 and slept % 60 == 0:
             fresh = load_work_schedule()
