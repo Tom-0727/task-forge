@@ -21,7 +21,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, AssistantMessage, RateLimitEvent, query
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, AssistantMessage, query
 
 # ─── Paths ────────────────────────────────────────────────────────────
 
@@ -35,7 +35,6 @@ SESSION_FILE = RUNTIME_DIR / "claude_session_id"
 LEGACY_SESSION_FILE = RUNTIME_DIR / "session_id"
 PENDING_MESSAGES_DIR = RUNTIME_DIR / "pending_messages"
 AWAITING_REPLY_DIR = RUNTIME_DIR / "awaiting_reply"
-RATELIMIT_FILE = RUNTIME_DIR / "ratelimit.json"
 INTERVAL_FILE = RUNTIME_DIR / "interval"
 WORK_SCHEDULE_FILE = RUNTIME_DIR / "work_schedule.json"
 BOOTSTRAP_STATE_FILE = RUNTIME_DIR / "bootstrap_state.json"
@@ -297,18 +296,6 @@ async def invoke_agent(prompt: str, max_turns: int, max_budget: float) -> str | 
     new_session_id = None
 
     async for message in query(prompt=prompt, options=options):
-        if isinstance(message, RateLimitEvent):
-            info = message.rate_limit_info
-            ratelimit = {
-                "ts": utcnow(),
-                "provider": "claude",
-                "status": info.status,
-                "resets_at": info.resets_at,
-                "rate_limit_type": info.rate_limit_type,
-            }
-            RATELIMIT_FILE.write_text(json.dumps(ratelimit))
-            log(f"Rate limit: {info.status} (type={info.rate_limit_type})")
-
         if isinstance(message, AssistantMessage):
             for block in message.content:
                 if hasattr(block, "text"):

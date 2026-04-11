@@ -19,11 +19,11 @@ from registry import (
     import_agent,
     list_agents,
     read_agent_status,
-    read_ratelimit,
     register_agent,
     remove_agent,
     update_agent,
 )
+from usage import get_usage, start_refresher as start_usage_refresher
 
 HARNESS_DIR = Path(__file__).resolve().parent.parent
 DEPLOY_SCRIPT = HARNESS_DIR / "deploy-agent"
@@ -745,36 +745,11 @@ def api_mailbox_disconnect():
     return jsonify({"ok": True})
 
 
-# ── API: Rate limit ──────────────────────────────────────────────────────
+# ── API: LLM usage (Claude + Codex) ─────────────────────────────────────
 
-@app.route("/api/ratelimit")
-def api_ratelimit():
-    agents = list_agents()
-    latest_claude = None
-
-    for name, info in agents.items():
-        if info.get("provider") != "claude":
-            continue
-        workdir = info.get("workdir", "")
-        if not workdir:
-            continue
-        rl = read_ratelimit(workdir)
-        if not rl:
-            continue
-        if latest_claude is None or rl.get("ts", "") > latest_claude.get("last_updated", ""):
-            latest_claude = {
-                "status": rl.get("status"),
-                "resets_at": rl.get("resets_at"),
-                "rate_limit_type": rl.get("rate_limit_type"),
-                "last_updated": rl.get("ts"),
-                "source_agent": name,
-            }
-
-    result = {}
-    if latest_claude:
-        result["claude"] = latest_claude
-
-    return jsonify(result)
+@app.route("/api/usage")
+def api_usage():
+    return jsonify(get_usage())
 
 
 # ── Main ──────────────────────────────────────────────────────────────────
@@ -796,6 +771,7 @@ def main():
     args = parser.parse_args()
 
     print(f"Agent Platform starting on http://{args.host}:{args.port}")
+    start_usage_refresher()
     app.run(host=args.host, port=args.port, debug=args.debug)
 
 

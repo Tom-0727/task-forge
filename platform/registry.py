@@ -212,12 +212,3 @@ def read_agent_status(workdir: str) -> dict:
     }
 
 
-def read_ratelimit(workdir: str) -> dict | None:
-    """Read Runtime/ratelimit.json from an agent's workdir."""
-    path = Path(workdir) / "Runtime" / "ratelimit.json"
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None

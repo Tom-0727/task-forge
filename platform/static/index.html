@@ -115,32 +115,86 @@
     .badge.wait { background: var(--wait-bg); color: var(--wait-fg); }
     .badge.offhours { background: var(--offhours-bg); color: var(--offhours-fg); }
 
-    /* ── Rate Limit ── */
-    .rl-status-row {
+    /* ── LLM Quota ── */
+    .usage-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .usage-card {
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.58);
+    }
+    .usage-title {
+      font-weight: 700;
+      font-size: 13px;
+      color: var(--ink);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .usage-title .sub {
+      font-weight: 500;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .usage-row {
       display: flex;
       align-items: center;
-      gap: 10px;
-    }
-    .rl-dot {
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .rl-dot.ok { background: var(--accent); }
-    .rl-dot.warning { background: #e6a817; }
-    .rl-dot.danger { background: #c0392b; }
-    .rl-status-label {
-      font-size: 0.85rem;
-      font-weight: 600;
+      gap: 8px;
+      font-size: 12px;
+      margin: 4px 0 2px;
       color: var(--ink);
     }
-    .rl-meta {
-      display: flex;
-      justify-content: space-between;
-      margin-top: 6px;
+    .usage-row .label {
+      color: var(--muted);
+      min-width: 86px;
+    }
+    .usage-bar {
+      flex: 1;
+      height: 8px;
+      border-radius: 4px;
+      background: var(--off-bg);
+      overflow: hidden;
+    }
+    .usage-bar .fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 4px;
+      transition: width 0.3s;
+    }
+    .usage-bar .fill.warn { background: #e6a817; }
+    .usage-bar .fill.danger { background: #c0392b; }
+    .usage-row .val {
+      min-width: 40px;
+      text-align: right;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .usage-reset {
+      font-size: 11px;
+      color: var(--muted);
+      margin: 0 0 6px 94px;
+    }
+    .usage-section {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      margin-top: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .usage-empty {
       font-size: 12px;
       color: var(--muted);
+      font-style: italic;
+    }
+    @media (max-width: 640px) {
+      .usage-grid { grid-template-columns: 1fr; }
     }
 
     /* ── Agent Cards ── */
@@ -445,19 +499,21 @@
       </div>
     </header>
 
-    <!-- Rate Limit -->
-    <section id="rateLimitPanel" class="panel hidden">
+    <!-- LLM Quota -->
+    <section id="usagePanel" class="panel hidden">
       <div class="panel-head">
-        <h2>Claude Rate Limit</h2>
-        <span id="rlSource" class="meta"></span>
+        <h2>LLM Quota</h2>
+        <span id="usageMeta" class="meta"></span>
       </div>
-      <div class="rl-status-row">
-        <div id="rlDot" class="rl-dot ok"></div>
-        <span id="rlStatusLabel" class="rl-status-label">--</span>
-      </div>
-      <div class="rl-meta">
-        <span id="rlType"></span>
-        <span id="rlReset"></span>
+      <div class="usage-grid">
+        <div class="usage-card">
+          <div class="usage-title">Claude <span id="usageClaudeSub" class="sub"></span></div>
+          <div id="usageClaude"><div class="usage-empty">loading…</div></div>
+        </div>
+        <div class="usage-card">
+          <div class="usage-title">Codex <span id="usageCodexSub" class="sub"></span></div>
+          <div id="usageCodex"><div class="usage-empty">loading…</div></div>
+        </div>
       </div>
     </section>
 
@@ -727,18 +783,25 @@ async function refreshDashboard(options = {}) {
     return;
   }
   try {
-    const [agentsResp, rlResp] = await Promise.all([
-      fetch('/api/agents'),
-      fetch('/api/ratelimit'),
-    ]);
+    const agentsResp = await fetch('/api/agents');
     const agentsData = await agentsResp.json();
-    const rlData = await rlResp.json();
 
     const agents = agentsData.agents || [];
     renderAgentCards(agents);
-    renderRateLimit(rlData);
     refreshConnections(agents);
     document.getElementById('syncMeta').textContent = `Last sync ${nowText()}`;
+
+    // Usage is a best-effort side panel — never let it break the dashboard.
+    try {
+      const usageResp = await fetch('/api/usage');
+      if (usageResp.ok) {
+        renderUsage(await usageResp.json());
+      } else {
+        renderUsage(null);
+      }
+    } catch (_err) {
+      renderUsage(null);
+    }
   } catch (err) {
     document.getElementById('syncMeta').textContent = 'Sync failed';
   }
@@ -847,36 +910,82 @@ async function cardDelete(name) {
   setTimeout(refreshDashboard, 500);
 }
 
-function renderRateLimit(data) {
-  const panel = document.getElementById('rateLimitPanel');
-  if (!data.claude) {
+// ── LLM Quota (Claude + Codex, refreshed hourly by the server) ──
+function renderUsage(data) {
+  const panel = document.getElementById('usagePanel');
+  if (!data || (!data.claude && !data.codex && !data.errors)) {
     panel.classList.add('hidden');
     return;
   }
   panel.classList.remove('hidden');
-  const cl = data.claude;
-  const status = cl.status || 'unknown';
 
-  const statusMap = {
-    'allowed':         { css: 'ok',      label: 'Normal' },
-    'allowed_warning': { css: 'warning', label: 'Approaching Limit' },
-    'rejected':        { css: 'danger',  label: 'Rate Limited' },
-  };
-  const mapped = statusMap[status] || { css: 'ok', label: status };
-
-  document.getElementById('rlDot').className = 'rl-dot ' + mapped.css;
-  document.getElementById('rlStatusLabel').textContent = mapped.label;
-
-  const typeText = cl.rate_limit_type ? `Window: ${cl.rate_limit_type.replace(/_/g, ' ')}` : '';
-  document.getElementById('rlType').textContent = typeText;
-
-  let resetText = '';
-  if (cl.resets_at) {
-    const d = new Date(cl.resets_at * 1000);
-    resetText = 'Resets at ' + d.toLocaleTimeString();
+  const meta = document.getElementById('usageMeta');
+  if (data.updated_at) {
+    const ts = data.updated_at.replace('T', ' ').replace('Z', ' UTC');
+    meta.textContent = `Updated ${ts} · refreshes hourly`;
+  } else {
+    meta.textContent = 'refreshes hourly';
   }
-  document.getElementById('rlReset').textContent = resetText;
-  document.getElementById('rlSource').textContent = `Source: ${cl.source_agent || '?'} · ${cl.last_updated || ''}`;
+
+  // Claude: the CLI reports "% used" — convert to "% remaining" for a consistent bar.
+  const claudeEl = document.getElementById('usageClaude');
+  const claudeSub = document.getElementById('usageClaudeSub');
+  claudeSub.textContent = '';
+  if (data.claude) {
+    const cl = data.claude;
+    const rows = [];
+    if (typeof cl.session_percent_used === 'number') {
+      rows.push(usageRow('Session', 100 - cl.session_percent_used, cl.session_resets));
+    }
+    if (typeof cl.week_percent_used === 'number') {
+      rows.push(usageRow('Week', 100 - cl.week_percent_used, cl.week_resets));
+    }
+    claudeEl.innerHTML = rows.length ? rows.join('') : '<div class="usage-empty">no data</div>';
+  } else {
+    const err = (data.errors && data.errors.claude) || 'unavailable';
+    claudeEl.innerHTML = `<div class="usage-empty">${esc(err)}</div>`;
+  }
+
+  // Codex: the CLI reports "% left" directly.
+  const codexEl = document.getElementById('usageCodex');
+  const codexSub = document.getElementById('usageCodexSub');
+  codexSub.textContent = data.codex && data.codex.model ? data.codex.model : '';
+  if (data.codex) {
+    const cx = data.codex;
+    const rows = [];
+    if (typeof cx['5h_percent_left'] === 'number') {
+      rows.push(usageRow('5h', cx['5h_percent_left'], cx['5h_resets']));
+    }
+    if (typeof cx['weekly_percent_left'] === 'number') {
+      rows.push(usageRow('Weekly', cx['weekly_percent_left'], cx['weekly_resets']));
+    }
+    if (cx.spark) {
+      rows.push('<div class="usage-section">Spark</div>');
+      if (typeof cx.spark['5h_percent_left'] === 'number') {
+        rows.push(usageRow('5h', cx.spark['5h_percent_left'], cx.spark['5h_resets']));
+      }
+      if (typeof cx.spark['weekly_percent_left'] === 'number') {
+        rows.push(usageRow('Weekly', cx.spark['weekly_percent_left'], cx.spark['weekly_resets']));
+      }
+    }
+    codexEl.innerHTML = rows.length ? rows.join('') : '<div class="usage-empty">no data</div>';
+  } else {
+    const err = (data.errors && data.errors.codex) || 'unavailable';
+    codexEl.innerHTML = `<div class="usage-empty">${esc(err)}</div>`;
+  }
+}
+
+function usageRow(label, percentRemaining, resets) {
+  const pct = Math.max(0, Math.min(100, percentRemaining));
+  const cls = pct < 10 ? 'danger' : pct < 25 ? 'warn' : '';
+  return `
+    <div class="usage-row">
+      <span class="label">${esc(label)}</span>
+      <div class="usage-bar"><div class="fill ${cls}" style="width:${pct}%"></div></div>
+      <span class="val">${pct}%</span>
+    </div>
+    ${resets ? `<div class="usage-reset">resets ${esc(resets)}</div>` : ''}
+  `;
 }
 
 // ── Detail Page ──
