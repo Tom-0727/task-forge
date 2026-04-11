@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# update-runtime — Update platform infrastructure files for a running agent
-# without touching agent-owned data (Memory, CLAUDE.md, mailbox history, etc.)
+# update-runtime — Update platform infrastructure files and managed rules files
+# without touching agent-authored notes or mailbox history
 #
 # Usage:
 #   ./update-runtime --workdir /abs/path/to/agent
@@ -75,6 +75,13 @@ provider_skill_root() {
   case "$1" in
     codex) echo ".agents" ;;
     claude) echo ".claude" ;;
+  esac
+}
+
+provider_rules_filename() {
+  case "$1" in
+    codex) echo "AGENTS.md" ;;
+    claude) echo "CLAUDE.md" ;;
   esac
 }
 
@@ -203,6 +210,27 @@ update_file() {
   return 0
 }
 
+migrate_directory_rules_file() {
+  local dir="$1"
+  local rules_filename="$2"
+  local legacy_path="${dir}/README.md"
+  local provider_path="${dir}/${rules_filename}"
+
+  if [[ -f "${legacy_path}" && ! -f "${provider_path}" ]]; then
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      echo "  [would migrate] ${legacy_path} -> ${provider_path}"
+    else
+      mv "${legacy_path}" "${provider_path}"
+      echo "  [migrated] ${legacy_path} -> ${provider_path}"
+    fi
+    return 0
+  fi
+
+  if [[ -f "${legacy_path}" && -f "${provider_path}" ]]; then
+    echo "  [warning] both ${legacy_path} and ${provider_path} exist; leaving legacy file untouched"
+  fi
+}
+
 # ── Core update logic for one agent ─────────────────────────────────
 
 update_one_agent() {
@@ -224,10 +252,7 @@ update_one_agent() {
   agent_name="$(read_agent_name "${dir}")"
 
   local rules_filename
-  case "${provider}" in
-    codex) rules_filename="AGENTS.md" ;;
-    claude) rules_filename="CLAUDE.md" ;;
-  esac
+  rules_filename="$(provider_rules_filename "${provider}")"
 
   local skill_dir
   skill_dir="$(provider_skill_root "${provider}")"
@@ -237,6 +262,25 @@ update_one_agent() {
 
   echo "Updating agent: ${agent_name} (${dir})"
   echo "  Provider: ${provider}"
+
+  local knowledge_rules_path="${dir}/Memory/knowledge/${rules_filename}"
+  local episodes_rules_path="${dir}/Memory/episodes/${rules_filename}"
+  local tool_notes_rules_path="${dir}/tool-notes/${rules_filename}"
+  local mailbox_rules_path="${dir}/mailbox/${rules_filename}"
+
+  migrate_directory_rules_file "${dir}/Memory/knowledge" "${rules_filename}"
+  migrate_directory_rules_file "${dir}/Memory/episodes" "${rules_filename}"
+  migrate_directory_rules_file "${dir}/tool-notes" "${rules_filename}"
+  migrate_directory_rules_file "${dir}/mailbox" "${rules_filename}"
+
+  update_file "${SHARED_TEMPLATE_DIR}/knowledge-README.md.tmpl" \
+    "${knowledge_rules_path}" "${agent_name}" "${rules_filename}" "${provider}"
+
+  update_file "${SHARED_TEMPLATE_DIR}/episodes-README.md.tmpl" \
+    "${episodes_rules_path}" "${agent_name}" "${rules_filename}" "${provider}"
+
+  update_file "${SHARED_TEMPLATE_DIR}/tool-notes-README.md.tmpl" \
+    "${tool_notes_rules_path}" "${agent_name}" "${rules_filename}" "${provider}"
 
   # ── Shared infrastructure files ──
   update_file "${SHARED_TEMPLATE_DIR}/mailbox_io.py.tmpl" \
@@ -316,9 +360,9 @@ EOF_CONTACTS
       echo "  [migrated] Runtime/mailbox_read_human_last_id -> Runtime/mailbox_read_last_id/human"
     fi
 
-    # Update mailbox/README.md
+    # Update mailbox rules file
     update_file "${SHARED_TEMPLATE_DIR}/mailbox-README.md.tmpl" \
-      "${dir}/mailbox/README.md" "${agent_name}" "${rules_filename}" "${provider}"
+      "${mailbox_rules_path}" "${agent_name}" "${rules_filename}" "${provider}"
   fi
 
   # ── Provider-specific files ──

@@ -42,13 +42,12 @@ Common files in both:
 
 ```text
 <target-dir>/
-  skills/            # Shared skill implementations
   stop-agent.sh      # Stop active runtime + bridge + web UI
   status-agent.sh    # Inspect runtime state
   requirements.txt   # Python deps (shared + provider-specific)
   tool-notes/        # One file per non-native external tool
   mailbox/
-    MAILBOX.jsonl    # Human-agent communication (append-only)
+    human.jsonl      # Human-agent communication (append-only)
   Memory/
     knowledge/
     episodes/
@@ -76,6 +75,7 @@ Also included:
 - `mailbox_feishu_bridge.py` — optional Feishu <-> mailbox bridge
 - `web_ui_server.py` — optional browser-based mailbox/status UI
 - `<provider-skill-root>/skills/mailbox-operate/` — self-contained mailbox-operate skill (SKILL.md + scripts)
+- `Memory/knowledge/<AGENTS.md|CLAUDE.md>` / `Memory/episodes/<AGENTS.md|CLAUDE.md>` / `tool-notes/<AGENTS.md|CLAUDE.md>` / `mailbox/<AGENTS.md|CLAUDE.md>` — provider-scoped directory rules
 - `mailbox_bridge.env.example` — bridge environment template
 
 If `mailbox_bridge.env` exists, generated runner scripts invoked by `bootstrap-runtime` will start the Feishu bridge automatically.

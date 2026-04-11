@@ -25,7 +25,7 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
 规范文件和文件夹：
 
 - `AGENTS.md / CLAUDE.md`
-  稳定的行为规则。仅包含高层行为约束，具体的文件格式规范下沉到各目录的 README.md 中。
+  稳定的行为规则。根目录和关键子目录都使用 provider 对应的规则文件名；Codex 用 `AGENTS.md`，Claude 用 `CLAUDE.md`。
 - `tool-notes/`
   部署后发现的非原生外部工具的使用说明。一个工具一个文件。
 - `Memory/knowledge/`
@@ -47,9 +47,9 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
 
 `AGENTS.md / CLAUDE.md` 只描述：什么时候用、什么属于这里、操作规则（创建/更新/归档条件）。
 
-各目录的 `README.md` 描述：文件命名、frontmatter 格式、正文模板。
+各目录下的 `AGENTS.md / CLAUDE.md` 描述：文件命名、frontmatter 格式、正文模板。
 
-智能体在创建或更新文件时，必须先读取对应目录的 README.md。
+智能体在创建或更新文件时，必须先读取对应目录下的 provider 规则文件。
 
 ## 2. Memory/knowledge（知识记忆）
 
@@ -82,7 +82,7 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
 ```text
 Memory/
   knowledge/
-    README.md          # 文件命名、frontmatter、正文模板的完整规范
+    AGENTS.md|CLAUDE.md  # 文件命名、frontmatter、正文模板的完整规范
     factual/
     conceptual/
     heuristic/
@@ -97,9 +97,9 @@ Memory/
 
 ### 2.3 文件格式规范
 
-命名、元数据、正文模板等详细规范存放在 `Memory/knowledge/README.md` 中。
+命名、元数据、正文模板等详细规范存放在 `Memory/knowledge/AGENTS.md` 或 `Memory/knowledge/CLAUDE.md` 中。
 
-智能体在创建或更新知识笔记时，必须先读取该 README.md。
+智能体在创建或更新知识笔记时，必须先读取该规则文件。
 
 概要：
 
@@ -202,7 +202,7 @@ Memory/
 ```text
 Memory/
   episodes/
-    README.md          # 文件命名、frontmatter、正文模板的完整规范
+    AGENTS.md|CLAUDE.md  # 文件命名、frontmatter、正文模板的完整规范
     2026/
       03/
         ep--20260320T021542Z--market-research--china-ev-sizing-pass-1.md
@@ -216,9 +216,9 @@ Memory/
 
 ### 3.5 文件格式规范
 
-命名、元数据、正文模板等详细规范存放在 `Memory/episodes/README.md` 中。
+命名、元数据、正文模板等详细规范存放在 `Memory/episodes/AGENTS.md` 或 `Memory/episodes/CLAUDE.md` 中。
 
-智能体在创建或更新执行记录时，必须先读取该 README.md。
+智能体在创建或更新执行记录时，必须先读取该规则文件。
 
 概要：
 
@@ -329,9 +329,9 @@ Memory/
 
 ### 5.3 文件格式规范
 
-命名、元数据、正文模板等详细规范存放在 `tool-notes/README.md` 中。
+命名、元数据、正文模板等详细规范存放在 `tool-notes/AGENTS.md` 或 `tool-notes/CLAUDE.md` 中。
 
-智能体在创建或更新工具笔记时，必须先读取该 README.md。
+智能体在创建或更新工具笔记时，必须先读取该规则文件。
 
 概要：
 
@@ -393,9 +393,9 @@ Codex 通过 `run_codex.mjs`（基于官方 Codex SDK）实现。
 
 ### 7.2 文件格式规范
 
-消息格式、操作规则等详细规范存放在 `mailbox/README.md` 中。
+消息格式、操作规则等详细规范存放在 `mailbox/AGENTS.md` 或 `mailbox/CLAUDE.md` 中。
 
-智能体在写入邮箱前，必须先读取该 README.md。
+智能体在写入邮箱前，必须先读取该规则文件。
 
 概要：
 

@@ -355,6 +355,10 @@ scaffold_workspace() {
   local created_at
   local created_date
   local rules_filename
+  local knowledge_rules_path
+  local episodes_rules_path
+  local tool_notes_rules_path
+  local mailbox_rules_path
   local provider_template_dir="${PROVIDER_TEMPLATE_ROOT}/${PROVIDER}"
   local provider_skill_dir
   local provider_agent_dir
@@ -362,6 +366,10 @@ scaffold_workspace() {
   created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   created_date="$(date -u +%Y%m%dT%H%M%SZ)"
   rules_filename="$(provider_rules_filename "${PROVIDER}")"
+  knowledge_rules_path="${WORKDIR}/Memory/knowledge/${rules_filename}"
+  episodes_rules_path="${WORKDIR}/Memory/episodes/${rules_filename}"
+  tool_notes_rules_path="${WORKDIR}/tool-notes/${rules_filename}"
+  mailbox_rules_path="${WORKDIR}/mailbox/${rules_filename}"
   provider_skill_dir="$(provider_skill_root "${PROVIDER}")"
   provider_agent_dir="$(provider_agent_root "${PROVIDER}")"
 
@@ -395,19 +403,19 @@ scaffold_workspace() {
   fi
 
   render_template "${SHARED_TEMPLATE_DIR}/knowledge-README.md.tmpl" \
-    "${WORKDIR}/Memory/knowledge/README.md" \
+    "${knowledge_rules_path}" \
     "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
 
   render_template "${SHARED_TEMPLATE_DIR}/episodes-README.md.tmpl" \
-    "${WORKDIR}/Memory/episodes/README.md" \
+    "${episodes_rules_path}" \
     "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
 
   render_template "${SHARED_TEMPLATE_DIR}/tool-notes-README.md.tmpl" \
-    "${WORKDIR}/tool-notes/README.md" \
+    "${tool_notes_rules_path}" \
     "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
 
   render_template "${SHARED_TEMPLATE_DIR}/mailbox-README.md.tmpl" \
-    "${WORKDIR}/mailbox/README.md" \
+    "${mailbox_rules_path}" \
     "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
 
   # Initialize contacts.json with human as default contact

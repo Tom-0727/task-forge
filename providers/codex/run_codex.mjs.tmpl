@@ -527,7 +527,7 @@ function buildPrompt(firstHeartbeat, mailboxStatus) {
       "You are {{AGENT_NAME}}. This is your first heartbeat on the Codex runtime.",
       "",
       "Read AGENTS.md to understand your behavioral rules.",
-      "Read mailbox/README.md before writing mailbox messages.",
+      "Read mailbox/{{RULES_FILENAME}} before writing mailbox messages.",
       "Run mailbox-read to read initial instructions.",
       "Use mailbox-read for reads and mailbox-send for sending messages.",
       "If you need to pause for a reply, use mailbox-send with --await-reply and stop.",

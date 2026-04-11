@@ -17,7 +17,7 @@ Beyond the brief, also read as needed:
 1. `Runtime/goal` for the current assigned goal.
 2. `Memory/episodes/` for recent episode files the brief does not already cover, usually the 3-5 most recent. Note their `objective`, `status`, and any Outcome / Reflection.
 3. `Memory/knowledge/` for relevant heuristics, metacognitive notes, or open questions.
-4. `Memory/episodes/README.md` for the file naming rule, frontmatter schema, and body template you must follow when creating the new episode file.
+4. `Memory/episodes/{{RULES_FILENAME}}` for the file naming rule, frontmatter schema, and body template you must follow when creating the new episode file.
 5. Any files the handoff brief points you at.
 
 Do not re-read `mailbox/human.jsonl` from scratch. The brief is authoritative about what is fresh this heartbeat.
@@ -47,7 +47,7 @@ Choose exactly one objective for this heartbeat. It must be:
 
 ### Step 4 — Create the Episode File
 
-Using the naming convention and frontmatter in `Memory/episodes/README.md`, create a new episode file under `Memory/episodes/YYYY/MM/`. Set:
+Using the naming convention and frontmatter in `Memory/episodes/{{RULES_FILENAME}}`, create a new episode file under `Memory/episodes/YYYY/MM/`. Set:
 - `eval_rounds: 0`
 - `objective: <your one-sentence objective>`
 - `last_edited_at: <today's UTC date>`
