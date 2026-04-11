@@ -78,6 +78,41 @@ provider_skill_root() {
   esac
 }
 
+provider_agent_root() {
+  case "$1" in
+    codex) echo ".codex" ;;
+    claude) echo ".claude" ;;
+  esac
+}
+
+provider_episode_planner_name() {
+  case "$1" in
+    codex) echo "episode_planner" ;;
+    claude) echo "episode-planner" ;;
+  esac
+}
+
+provider_episode_evaluator_name() {
+  case "$1" in
+    codex) echo "episode_evaluator" ;;
+    claude) echo "episode-evaluator" ;;
+  esac
+}
+
+provider_mailbox_read_summary_cmd() {
+  case "$1" in
+    codex) echo "mailbox-read --summary" ;;
+    claude) echo "uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --summary" ;;
+  esac
+}
+
+provider_mailbox_read_contact_cmd() {
+  case "$1" in
+    codex) echo "mailbox-read --from <contact>" ;;
+    claude) echo "uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --from <contact>" ;;
+  esac
+}
+
 read_agent_name() {
   local dir="$1"
   local name_file="${dir}/Runtime/agent_name"
@@ -103,7 +138,13 @@ render_template() {
   CREATED_AT="" \
   CREATED_DATE="" \
   RULES_FILENAME="$rules_filename" \
-  PROVIDER_SKILL_DIR="$(provider_skill_root "${provider}")/skills" \
+  PROVIDER_SKILL_ROOT="$(provider_skill_root "${provider}")" \
+  PROVIDER_SKILLS_DIR="$(provider_skill_root "${provider}")/skills" \
+  PROVIDER_AGENTS_DIR="$(provider_agent_root "${provider}")/agents" \
+  EPISODE_PLANNER_NAME="$(provider_episode_planner_name "${provider}")" \
+  EPISODE_EVALUATOR_NAME="$(provider_episode_evaluator_name "${provider}")" \
+  MAILBOX_READ_SUMMARY_CMD="$(provider_mailbox_read_summary_cmd "${provider}")" \
+  MAILBOX_READ_CONTACT_CMD="$(provider_mailbox_read_contact_cmd "${provider}")" \
   python3 - <<'PY'
 from pathlib import Path
 import os
@@ -118,7 +159,13 @@ for key in (
     "CREATED_AT",
     "CREATED_DATE",
     "RULES_FILENAME",
-    "PROVIDER_SKILL_DIR",
+    "PROVIDER_SKILL_ROOT",
+    "PROVIDER_SKILLS_DIR",
+    "PROVIDER_AGENTS_DIR",
+    "EPISODE_PLANNER_NAME",
+    "EPISODE_EVALUATOR_NAME",
+    "MAILBOX_READ_SUMMARY_CMD",
+    "MAILBOX_READ_CONTACT_CMD",
 ):
     content = content.replace(f"{{{{{key}}}}}", os.environ[key])
 
@@ -184,6 +231,8 @@ update_one_agent() {
 
   local skill_dir
   skill_dir="$(provider_skill_root "${provider}")"
+  local agent_dir
+  agent_dir="$(provider_agent_root "${provider}")"
   local provider_template_dir="${PROVIDER_TEMPLATE_ROOT}/${provider}"
 
   echo "Updating agent: ${agent_name} (${dir})"
@@ -282,6 +331,17 @@ EOF_CONTACTS
 
     update_file "${provider_template_dir}/package.json.tmpl" \
       "${dir}/package.json" "${agent_name}" "${rules_filename}" "${provider}"
+
+    if [[ -d "${provider_template_dir}/agents" ]]; then
+      mkdir -p "${dir}/${agent_dir}/agents"
+      for agent_tmpl in "${provider_template_dir}/agents/"*.toml.tmpl; do
+        [[ -f "${agent_tmpl}" ]] || continue
+        local agent_basename
+        agent_basename="$(basename "${agent_tmpl}" .tmpl)"
+        update_file "${agent_tmpl}" \
+          "${dir}/${agent_dir}/agents/${agent_basename}" "${agent_name}" "${rules_filename}" "${provider}"
+      done
+    fi
   else
     update_file "${provider_template_dir}/run_claude.py.tmpl" \
       "${dir}/run_claude.py" "${agent_name}" "${rules_filename}" "${provider}"
@@ -291,12 +351,13 @@ EOF_CONTACTS
 
     # Built-in agents (evaluator etc.)
     if [[ -d "${provider_template_dir}/agents" ]]; then
+      mkdir -p "${dir}/${agent_dir}/agents"
       for agent_tmpl in "${provider_template_dir}/agents/"*.md.tmpl; do
         [[ -f "${agent_tmpl}" ]] || continue
         local agent_basename
         agent_basename="$(basename "${agent_tmpl}" .tmpl)"
         update_file "${agent_tmpl}" \
-          "${dir}/${skill_dir}/agents/${agent_basename}" "${agent_name}" "${rules_filename}" "${provider}"
+          "${dir}/${agent_dir}/agents/${agent_basename}" "${agent_name}" "${rules_filename}" "${provider}"
       done
     fi
   fi

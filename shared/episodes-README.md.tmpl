@@ -4,6 +4,10 @@ Bounded execution records for {{AGENT_NAME}}.
 
 **You MUST read this file before creating or updating any episode.**
 
+## Keep Episode Files Concise
+
+The episode file is the durable, decision-relevant record — **not** the place where full execution context flows. Detailed planning briefings and detailed evaluation reasoning are passed between the main agent and its subagents (`{{EPISODE_PLANNER_NAME}}`, `{{EPISODE_EVALUATOR_NAME}}`) via prompts and return values, not by dumping them here. Put only what the agent itself will need when reading this episode back later.
+
 ## Unit of Record
 
 `One episode = one bounded work cycle with a direct objective and a judgeable outcome`
@@ -66,18 +70,27 @@ id: ep.<started_at_utc>.<domain>.<slug>
 task_id: task.<domain>.<task-slug>
 domain: <domain>
 title: Human-readable episode label
-objective: Direct objective of this attempt.
-status: active | completed | failed | blocked | abandoned
+objective: One sentence describing what "done" looks like. Qualitative criteria are fine — you do not need to quantify.
+status: completed | failed   # omit at creation; set only at the terminal state
+eval_rounds: 0
 last_edited_at: YYYY-MM-DD
 ---
 ```
+
+Status meaning:
+- `completed` — the evaluator returned PASS for this episode's objective.
+- `failed` — the evaluator returned FAIL after the 3-round soft cap, or execution hit an unrecoverable blocker.
+
+An episode file with no `status` field is mid-flight and not authoritative. The planner creates the file without `status`; the main agent writes it at the end of the heartbeat when the outcome is decided.
+
+`eval_rounds` is the counter for the per-episode evaluator retry cap. It starts at 0 and is incremented every time the main agent re-invokes the evaluator for this episode.
 
 ## Body Template
 
 ```markdown
 ## Objective
 
-Direct objective and success criteria.
+One sentence describing what "done" looks like for this episode. Qualitative criteria are fine — you do not need to quantify.
 
 ## Context Snapshot
 

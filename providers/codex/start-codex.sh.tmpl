@@ -81,7 +81,7 @@ start_bridge_if_configured() {
   fi
 }
 
-mkdir -p "$RUNTIME_DIR"
+mkdir -p "$RUNTIME_DIR" "${AGENT_DIR}/.codex/agents" "${AGENT_DIR}/.agents/skills"
 
 if [[ -z "${NODE_BIN}" ]]; then
   echo "node is not installed or not on PATH."

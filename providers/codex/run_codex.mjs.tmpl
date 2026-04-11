@@ -538,12 +538,10 @@ function buildPrompt(firstHeartbeat, mailboxStatus) {
   }
 
   return [
-    "Heartbeat wakeup for {{AGENT_NAME}} on the Codex runtime.",
+    "Heartbeat wakeup for {{AGENT_NAME}} on the Codex runtime. No new mailbox messages.",
     "",
-    "1. Check mailbox: mailbox-read --summary",
-    "2. Read and address any unread messages.",
-    "3. If blocked on a reply, use mailbox-send with --await-reply and stop.",
-    "4. Otherwise continue your current work on the same Codex thread.",
+    "Continue your current work per AGENTS.md. Do not run mailbox-read — " +
+      "the wake-up signal is authoritative about fresh mailbox state.",
     "",
     `Working directory: ${AGENT_DIR}`,
   ].join("\n");

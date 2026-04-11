@@ -225,11 +225,9 @@ def build_prompt(first_heartbeat: bool, mailbox_status: str) -> str:
         )
     else:
         return (
-            "Heartbeat wakeup for {{AGENT_NAME}}.\n\n"
-            "1. Check mailbox: uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --summary\n"
-            "2. Read and address any unread messages.\n"
-            "3. If you need to pause for a reply, use send_mailbox.py with --await-reply and stop.\n"
-            "4. Otherwise, continue your current work.\n\n"
+            "Heartbeat wakeup for {{AGENT_NAME}}. No new mailbox messages.\n\n"
+            "Continue your current work per CLAUDE.md. Do not run read_mailbox.py — "
+            "the wake-up signal is authoritative about fresh mailbox state.\n\n"
             f"Working directory: {AGENT_DIR}"
         )
 

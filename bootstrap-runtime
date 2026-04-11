@@ -92,6 +92,61 @@ provider_skill_root() {
   esac
 }
 
+provider_agent_root() {
+  case "$1" in
+    codex) echo ".codex" ;;
+    claude) echo ".claude" ;;
+    *)
+      echo "Error: unsupported provider for agent root: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+provider_episode_planner_name() {
+  case "$1" in
+    codex) echo "episode_planner" ;;
+    claude) echo "episode-planner" ;;
+    *)
+      echo "Error: unsupported provider for planner agent: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+provider_episode_evaluator_name() {
+  case "$1" in
+    codex) echo "episode_evaluator" ;;
+    claude) echo "episode-evaluator" ;;
+    *)
+      echo "Error: unsupported provider for evaluator agent: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+provider_mailbox_read_summary_cmd() {
+  case "$1" in
+    codex) echo "mailbox-read --summary" ;;
+    claude) echo "uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --summary" ;;
+    *)
+      echo "Error: unsupported provider for mailbox read summary command: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+provider_mailbox_read_contact_cmd() {
+  case "$1" in
+    codex) echo "mailbox-read --from <contact>" ;;
+    claude) echo "uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --from <contact>" ;;
+    *)
+      echo "Error: unsupported provider for mailbox read contact command: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
 derive_agent_name() {
   local dir="$1"
   local name
@@ -190,7 +245,13 @@ render_template() {
   CREATED_AT="$created_at" \
   CREATED_DATE="$created_date" \
   RULES_FILENAME="$rules_filename" \
-  PROVIDER_SKILL_DIR="$(provider_skill_root "${PROVIDER}")/skills" \
+  PROVIDER_SKILL_ROOT="$(provider_skill_root "${PROVIDER}")" \
+  PROVIDER_SKILLS_DIR="$(provider_skill_root "${PROVIDER}")/skills" \
+  PROVIDER_AGENTS_DIR="$(provider_agent_root "${PROVIDER}")/agents" \
+  EPISODE_PLANNER_NAME="$(provider_episode_planner_name "${PROVIDER}")" \
+  EPISODE_EVALUATOR_NAME="$(provider_episode_evaluator_name "${PROVIDER}")" \
+  MAILBOX_READ_SUMMARY_CMD="$(provider_mailbox_read_summary_cmd "${PROVIDER}")" \
+  MAILBOX_READ_CONTACT_CMD="$(provider_mailbox_read_contact_cmd "${PROVIDER}")" \
   python3 - <<'PY'
 from pathlib import Path
 import os
@@ -205,7 +266,13 @@ for key in (
     "CREATED_AT",
     "CREATED_DATE",
     "RULES_FILENAME",
-    "PROVIDER_SKILL_DIR",
+    "PROVIDER_SKILL_ROOT",
+    "PROVIDER_SKILLS_DIR",
+    "PROVIDER_AGENTS_DIR",
+    "EPISODE_PLANNER_NAME",
+    "EPISODE_EVALUATOR_NAME",
+    "MAILBOX_READ_SUMMARY_CMD",
+    "MAILBOX_READ_CONTACT_CMD",
 ):
     content = content.replace(f"{{{{{key}}}}}", os.environ[key])
 
@@ -252,6 +319,9 @@ ensure_template_sources() {
       "start-codex.sh.tmpl"
       "package.json.tmpl"
       "requirements.txt.tmpl"
+      "agents/evaluator.toml.tmpl"
+      "agents/episode_planner.toml.tmpl"
+      "agents/episode_evaluator.toml.tmpl"
     )
   else
     provider_required=(
@@ -259,6 +329,8 @@ ensure_template_sources() {
       "start-claude.sh.tmpl"
       "requirements.txt.tmpl"
       "agents/evaluator.md.tmpl"
+      "agents/episode-planner.md.tmpl"
+      "agents/episode-evaluator.md.tmpl"
     )
   fi
 
@@ -285,11 +357,13 @@ scaffold_workspace() {
   local rules_filename
   local provider_template_dir="${PROVIDER_TEMPLATE_ROOT}/${PROVIDER}"
   local provider_skill_dir
+  local provider_agent_dir
 
   created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   created_date="$(date -u +%Y%m%dT%H%M%SZ)"
   rules_filename="$(provider_rules_filename "${PROVIDER}")"
   provider_skill_dir="$(provider_skill_root "${PROVIDER}")"
+  provider_agent_dir="$(provider_agent_root "${PROVIDER}")"
 
   mkdir -p "${WORKDIR}"
   mkdir -p "${WORKDIR}/Memory/knowledge/factual"
@@ -303,7 +377,7 @@ scaffold_workspace() {
   mkdir -p "${WORKDIR}/Runtime/awaiting_reply"
   mkdir -p "${WORKDIR}/Runtime/mailbox_read_last_id"
   mkdir -p "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts"
-  mkdir -p "${WORKDIR}/${provider_skill_dir}/agents"
+  mkdir -p "${WORKDIR}/${provider_agent_dir}/agents"
 
   render_template "${SHARED_TEMPLATE_DIR}/agent-rules.md.tmpl" \
     "${WORKDIR}/${rules_filename}" \
@@ -418,7 +492,20 @@ EOF_CONTACTS
         local agent_basename
         agent_basename="$(basename "${agent_tmpl}" .tmpl)"
         render_template "${agent_tmpl}" \
-          "${WORKDIR}/${provider_skill_dir}/agents/${agent_basename}" \
+          "${WORKDIR}/${provider_agent_dir}/agents/${agent_basename}" \
+          "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+      done
+    fi
+  fi
+
+  if [[ "${PROVIDER}" == "codex" ]]; then
+    if [[ -d "${provider_template_dir}/agents" ]]; then
+      for agent_tmpl in "${provider_template_dir}/agents/"*.toml.tmpl; do
+        [[ -f "${agent_tmpl}" ]] || continue
+        local agent_basename
+        agent_basename="$(basename "${agent_tmpl}" .tmpl)"
+        render_template "${agent_tmpl}" \
+          "${WORKDIR}/${provider_agent_dir}/agents/${agent_basename}" \
           "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
       done
     fi
