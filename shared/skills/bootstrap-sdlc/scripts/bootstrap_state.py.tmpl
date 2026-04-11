@@ -1,0 +1,258 @@
+#!/usr/bin/env python3
+"""bootstrap_state.py — Bootstrap SDLC state for {{AGENT_NAME}}
+
+Created: {{CREATED_AT}}
+
+A small state machine that gates the heartbeat loop. Until phase == "done",
+the agent must advance the bootstrap phases (prd -> design -> done) before
+doing any implementation work. Phase transitions require explicit human
+approval via mailbox.
+
+State file: <agent_workdir>/Runtime/bootstrap_state.json
+Protocol doc: <agent_workdir>/{{PROVIDER_SKILLS_DIR}}/bootstrap-sdlc/SKILL.md
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def find_agent_dir() -> Path:
+    """Walk up from this script's location until we find a directory that
+    contains a `Runtime/` child. That is the agent workdir.
+
+    The script lives under `<workdir>/.claude/skills/bootstrap-sdlc/scripts/`
+    (or `.agents/` for Codex), so we normally walk up 4-5 levels. We cap the
+    walk at 10 to keep the failure mode obvious rather than infinite.
+    """
+    cur = Path(__file__).resolve().parent
+    for _ in range(10):
+        if (cur / "Runtime").is_dir():
+            return cur
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    raise SystemExit(
+        "bootstrap_state.py could not locate the agent workdir "
+        "(no Runtime/ directory found in any parent of this script)"
+    )
+
+
+AGENT_DIR = find_agent_dir()
+RUNTIME_DIR = AGENT_DIR / "Runtime"
+STATE_FILE = RUNTIME_DIR / "bootstrap_state.json"
+
+VALID_PHASES = ("prd", "design", "done")
+# prd may only go to design; design may only go to done.
+ALLOWED_TRANSITIONS = {
+    "prd": {"design"},
+    "design": {"done"},
+    "done": set(),
+}
+
+
+def utcnow() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def read_state() -> dict | None:
+    """Return the current bootstrap state dict, or None if not initialized."""
+    if not STATE_FILE.exists():
+        return None
+    try:
+        data = json.loads(STATE_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def get_phase() -> str:
+    """Return the current phase. Returns "done" when bootstrap is not active.
+
+    This fallback keeps legacy agents (that were deployed before the bootstrap
+    mechanism existed) unaffected — for them bootstrap is simply complete.
+    """
+    state = read_state()
+    if state is None:
+        return "done"
+    phase = state.get("phase")
+    if phase not in VALID_PHASES:
+        return "done"
+    return phase
+
+
+def write_state(state: dict) -> None:
+    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+
+
+def init_state(
+    prd_path: str,
+    architecture_path: str,
+    assumptions_path: str,
+    *,
+    force: bool = False,
+) -> dict:
+    """Initialize a fresh bootstrap state at phase=prd."""
+    if STATE_FILE.exists() and not force:
+        raise SystemExit(f"bootstrap state already exists at {STATE_FILE}")
+    now = utcnow()
+    state = {
+        "phase": "prd",
+        "prd_path": prd_path,
+        "architecture_path": architecture_path,
+        "assumptions_path": assumptions_path,
+        "created_at": now,
+        "phase_history": [
+            {
+                "phase": "prd",
+                "entered_at": now,
+                "entered_by": "deploy-agent",
+            }
+        ],
+    }
+    write_state(state)
+    return state
+
+
+def advance_phase(to_phase: str, approver: str, note: str = "") -> dict:
+    """Advance to the next phase. Validates the transition.
+
+    Raises SystemExit on invalid transition or missing state.
+    """
+    state = read_state()
+    if state is None:
+        raise SystemExit(
+            "bootstrap state not initialized. Run `bootstrap_state.py init` first."
+        )
+    current = state.get("phase", "done")
+    if to_phase not in VALID_PHASES:
+        raise SystemExit(f"invalid target phase: {to_phase}")
+    if to_phase not in ALLOWED_TRANSITIONS.get(current, set()):
+        raise SystemExit(
+            f"illegal transition: {current} -> {to_phase}. "
+            f"Allowed from {current}: {sorted(ALLOWED_TRANSITIONS.get(current, set()))}"
+        )
+    if not approver.strip():
+        raise SystemExit("--approver is required and must be non-empty")
+
+    now = utcnow()
+    history = state.setdefault("phase_history", [])
+    if history and "exited_at" not in history[-1]:
+        history[-1]["exited_at"] = now
+        history[-1]["exited_by"] = approver
+        if note:
+            history[-1]["exit_note"] = note
+
+    state["phase"] = to_phase
+    history.append(
+        {
+            "phase": to_phase,
+            "entered_at": now,
+            "entered_by": approver,
+        }
+    )
+    write_state(state)
+    return state
+
+
+def reset_state(approver: str, note: str = "") -> dict:
+    """Explicitly reset bootstrap back to phase=prd. Only humans should
+    trigger this via the agent; the agent must NOT reset on its own."""
+    state = read_state()
+    if state is None:
+        raise SystemExit("bootstrap state not initialized; cannot reset")
+    if not approver.strip():
+        raise SystemExit("--approver is required and must be non-empty")
+    now = utcnow()
+    history = state.setdefault("phase_history", [])
+    if history and "exited_at" not in history[-1]:
+        history[-1]["exited_at"] = now
+        history[-1]["exited_by"] = approver
+        history[-1]["exit_note"] = note or "reset"
+    state["phase"] = "prd"
+    history.append(
+        {
+            "phase": "prd",
+            "entered_at": now,
+            "entered_by": approver,
+            "entry_note": note or "reset",
+        }
+    )
+    write_state(state)
+    return state
+
+
+def cmd_show(_args) -> None:
+    state = read_state()
+    if state is None:
+        print(json.dumps({"phase": "done", "initialized": False}, indent=2))
+        return
+    print(json.dumps(state, indent=2, ensure_ascii=False))
+
+
+def cmd_phase(_args) -> None:
+    print(get_phase())
+
+
+def cmd_init(args) -> None:
+    state = init_state(
+        prd_path=args.prd_path,
+        architecture_path=args.architecture_path,
+        assumptions_path=args.assumptions_path,
+        force=args.force,
+    )
+    print(json.dumps(state, indent=2, ensure_ascii=False))
+
+
+def cmd_advance(args) -> None:
+    state = advance_phase(args.to, args.approver, args.note or "")
+    print(json.dumps(state, indent=2, ensure_ascii=False))
+
+
+def cmd_reset(args) -> None:
+    state = reset_state(args.approver, args.note or "")
+    print(json.dumps(state, indent=2, ensure_ascii=False))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Bootstrap SDLC state for {{AGENT_NAME}}"
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_show = sub.add_parser("show", help="print the full state JSON")
+    p_show.set_defaults(func=cmd_show)
+
+    p_phase = sub.add_parser("phase", help="print just the current phase")
+    p_phase.set_defaults(func=cmd_phase)
+
+    p_init = sub.add_parser("init", help="initialize a fresh state at phase=prd")
+    p_init.add_argument("--prd-path", required=True)
+    p_init.add_argument("--architecture-path", required=True)
+    p_init.add_argument("--assumptions-path", required=True)
+    p_init.add_argument("--force", action="store_true")
+    p_init.set_defaults(func=cmd_init)
+
+    p_adv = sub.add_parser("advance", help="advance to the next phase")
+    p_adv.add_argument("--to", required=True, choices=VALID_PHASES)
+    p_adv.add_argument("--approver", required=True)
+    p_adv.add_argument("--note", default="")
+    p_adv.set_defaults(func=cmd_advance)
+
+    p_reset = sub.add_parser("reset", help="explicit reset back to phase=prd")
+    p_reset.add_argument("--approver", required=True)
+    p_reset.add_argument("--note", default="")
+    p_reset.set_defaults(func=cmd_reset)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

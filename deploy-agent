@@ -9,7 +9,7 @@ PROVIDER_TEMPLATE_ROOT="${SCRIPT_DIR}/providers"
 usage() {
   cat <<'USAGE'
 Usage:
-  ./bootstrap-runtime \
+  ./deploy-agent \
     --goal "Goal text" \
     --first-instruction "First instruction text" \
     --provider codex|claude \
@@ -27,7 +27,7 @@ Web UI mode only:
   --web-ui-port 8080
 
 Example:
-  ./bootstrap-runtime \
+  ./deploy-agent \
     --goal "Goal text" \
     --first-instruction "First instruction text" \
     --provider codex \
@@ -306,11 +306,23 @@ ensure_template_sources() {
     "mailbox_bridge.env.example.tmpl"
     "stop-agent.sh.tmpl"
     "status-agent.sh.tmpl"
-    "skills/mailbox-operate/SKILL.md.tmpl"
-    "skills/mailbox-operate/scripts/send_mailbox.py.tmpl"
-    "skills/mailbox-operate/scripts/read_mailbox.py.tmpl"
-    "skills/mailbox-operate/scripts/contacts.py.tmpl"
   )
+
+  # Skills are auto-discovered under shared/skills/<skill-name>/; each must
+  # provide at minimum a SKILL.md.tmpl. Individual script files are picked up
+  # by scaffold_workspace via directory traversal.
+  if [[ ! -d "${SHARED_TEMPLATE_DIR}/skills" ]]; then
+    echo "Error: shared skills directory not found: ${SHARED_TEMPLATE_DIR}/skills"
+    exit 1
+  fi
+  local skill_src
+  for skill_src in "${SHARED_TEMPLATE_DIR}/skills/"*/; do
+    [[ -d "${skill_src}" ]] || continue
+    if [[ ! -f "${skill_src}/SKILL.md.tmpl" ]]; then
+      echo "Error: skill missing SKILL.md.tmpl: ${skill_src}"
+      exit 1
+    fi
+  done
 
   local provider_required=()
   if [[ "${PROVIDER}" == "codex" ]]; then
@@ -384,7 +396,7 @@ scaffold_workspace() {
   mkdir -p "${WORKDIR}/Runtime/pending_messages"
   mkdir -p "${WORKDIR}/Runtime/awaiting_reply"
   mkdir -p "${WORKDIR}/Runtime/mailbox_read_last_id"
-  mkdir -p "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts"
+  mkdir -p "${WORKDIR}/${provider_skill_dir}/skills"
   mkdir -p "${WORKDIR}/${provider_agent_dir}/agents"
 
   render_template "${SHARED_TEMPLATE_DIR}/agent-rules.md.tmpl" \
@@ -457,21 +469,52 @@ EOF_CONTACTS
     "${WORKDIR}/status-agent.sh" \
     "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
 
-  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/SKILL.md.tmpl" \
-    "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/SKILL.md" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+  # ── Shared skills: auto-discover every shared/skills/<skill-name>/ ──
+  # Each skill must provide SKILL.md.tmpl. Scripts under scripts/*.tmpl are
+  # rendered and chmod +x'd automatically. Adding a new skill = dropping a
+  # new directory here, no deploy-agent edit required.
+  local skill_src_dir skill_basename skill_dst script_tmpl script_basename
+  for skill_src_dir in "${SHARED_TEMPLATE_DIR}/skills/"*/; do
+    [[ -d "${skill_src_dir}" ]] || continue
+    skill_basename="$(basename "${skill_src_dir}")"
+    skill_dst="${WORKDIR}/${provider_skill_dir}/skills/${skill_basename}"
+    mkdir -p "${skill_dst}"
 
-  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/send_mailbox.py.tmpl" \
-    "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+    if [[ -f "${skill_src_dir}SKILL.md.tmpl" ]]; then
+      render_template "${skill_src_dir}SKILL.md.tmpl" \
+        "${skill_dst}/SKILL.md" \
+        "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+    fi
 
-  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/read_mailbox.py.tmpl" \
-    "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+    if [[ -d "${skill_src_dir}scripts" ]]; then
+      mkdir -p "${skill_dst}/scripts"
+      for script_tmpl in "${skill_src_dir}scripts/"*.tmpl; do
+        [[ -f "${script_tmpl}" ]] || continue
+        script_basename="$(basename "${script_tmpl}" .tmpl)"
+        render_template "${script_tmpl}" \
+          "${skill_dst}/scripts/${script_basename}" \
+          "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+        chmod +x "${skill_dst}/scripts/${script_basename}"
+      done
+    fi
+  done
 
-  render_template "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/contacts.py.tmpl" \
-    "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/contacts.py" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
+  # Initialize bootstrap state at phase=prd for newly deployed agents.
+  # Legacy agents without this file are treated as phase=done by the runtime.
+  # The bootstrap_state.py CLI lives in the bootstrap-sdlc skill; this file
+  # is the mutable state it reads/writes.
+  cat > "${WORKDIR}/Runtime/bootstrap_state.json" <<EOF_BOOTSTRAP
+{
+  "phase": "prd",
+  "prd_path": "Memory/knowledge/conceptual/conceptual--bootstrap--prd.md",
+  "architecture_path": "Memory/knowledge/conceptual/conceptual--bootstrap--architecture.md",
+  "assumptions_path": "Memory/knowledge/conceptual/conceptual--bootstrap--assumptions.md",
+  "created_at": "${created_at}",
+  "phase_history": [
+    {"phase": "prd", "entered_at": "${created_at}", "note": "initial bootstrap"}
+  ]
+}
+EOF_BOOTSTRAP
 
   if [[ "${PROVIDER}" == "codex" ]]; then
     render_template "${provider_template_dir}/run_codex.mjs.tmpl" \
@@ -526,9 +569,7 @@ EOF_CONTACTS
   chmod +x "${WORKDIR}/web_ui_server.py"
   chmod +x "${WORKDIR}/stop-agent.sh"
   chmod +x "${WORKDIR}/status-agent.sh"
-  chmod +x "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py"
-  chmod +x "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py"
-  chmod +x "${WORKDIR}/${provider_skill_dir}/skills/mailbox-operate/scripts/contacts.py"
+  # Skill scripts are chmod'd inside the skill-rendering loop above.
 
   if [[ "${PROVIDER}" == "codex" ]]; then
     chmod +x "${WORKDIR}/run_codex.mjs"

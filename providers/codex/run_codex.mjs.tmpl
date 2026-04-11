@@ -26,6 +26,7 @@ const PENDING_MESSAGES_DIR = path.join(RUNTIME_DIR, "pending_messages");
 const AWAITING_REPLY_DIR = path.join(RUNTIME_DIR, "awaiting_reply");
 const INTERVAL_FILE = path.join(RUNTIME_DIR, "interval");
 const WORK_SCHEDULE_FILE = path.join(RUNTIME_DIR, "work_schedule.json");
+const BOOTSTRAP_STATE_FILE = path.join(RUNTIME_DIR, "bootstrap_state.json");
 
 let shutdownRequested = false;
 let currentAbortController = null;
@@ -504,11 +505,52 @@ function checkWorkSchedule() {
   return true;
 }
 
+// ─── Bootstrap state ───────────────────────────────────────────────
+
+function readBootstrapPhase() {
+  if (!fileExists(BOOTSTRAP_STATE_FILE)) {
+    return "done";
+  }
+  try {
+    const data = JSON.parse(readText(BOOTSTRAP_STATE_FILE));
+    if (!data || typeof data !== "object") {
+      return "done";
+    }
+    const phase = data.phase;
+    if (phase !== "prd" && phase !== "design" && phase !== "done") {
+      return "done";
+    }
+    return phase;
+  } catch {
+    return "done";
+  }
+}
+
+function buildBootstrapNoticeLines(phase) {
+  // The full protocol lives in the bootstrap-sdlc skill; this notice just
+  // forces the agent to read it before doing anything else.
+  if (phase === "done") {
+    return [];
+  }
+  return [
+    `BOOTSTRAP ACTIVE — phase: ${phase}`,
+    "You are NOT allowed to do business implementation work this heartbeat. " +
+      "Before any other action, use the `bootstrap-sdlc` skill and obey its " +
+      "Protocol section in full. Only the files permitted there may be " +
+      "written this heartbeat.",
+    "",
+  ];
+}
+
 // ─── Prompt building ───────────────────────────────────────────────
 
 function buildPrompt(firstHeartbeat, mailboxStatus) {
+  const bootstrapPhase = readBootstrapPhase();
+  const bootstrapLines = buildBootstrapNoticeLines(bootstrapPhase);
+
   if (mailboxStatus) {
     return [
+      ...bootstrapLines,
       "New mailbox messages have arrived.",
       "",
       mailboxStatus,
@@ -524,9 +566,11 @@ function buildPrompt(firstHeartbeat, mailboxStatus) {
 
   if (firstHeartbeat) {
     return [
+      ...bootstrapLines,
       "You are {{AGENT_NAME}}. This is your first heartbeat on the Codex runtime.",
       "",
-      "Read AGENTS.md to understand your behavioral rules.",
+      "Read AGENTS.md to understand your behavioral rules, including the " +
+        "Bootstrap Protocol that gates your first phases of work.",
       "Read mailbox/{{RULES_FILENAME}} before writing mailbox messages.",
       "Run mailbox-read to read initial instructions.",
       "Use mailbox-read for reads and mailbox-send for sending messages.",
@@ -538,6 +582,7 @@ function buildPrompt(firstHeartbeat, mailboxStatus) {
   }
 
   return [
+    ...bootstrapLines,
     "Heartbeat wakeup for {{AGENT_NAME}} on the Codex runtime. No new mailbox messages.",
     "",
     "Continue your current work per AGENTS.md. Do not run mailbox-read — " +

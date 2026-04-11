@@ -301,18 +301,51 @@ update_one_agent() {
   update_file "${SHARED_TEMPLATE_DIR}/mailbox_bridge.env.example.tmpl" \
     "${dir}/mailbox_bridge.env.example" "${agent_name}" "${rules_filename}" "${provider}"
 
-  # ── Built-in skills (mailbox-operate) ──
-  update_file "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/SKILL.md.tmpl" \
-    "${dir}/${skill_dir}/skills/mailbox-operate/SKILL.md" "${agent_name}" "${rules_filename}" "${provider}"
+  # ── Shared skills: auto-discover shared/skills/<skill-name>/ ──
+  # Each skill syncs SKILL.md and every scripts/*.tmpl into the agent's
+  # provider-specific skill root. Runtime/bootstrap_state.json is NOT
+  # created here — for legacy agents absence means phase=done.
+  local skill_src_dir skill_basename skill_dst_dir script_tmpl script_basename
+  for skill_src_dir in "${SHARED_TEMPLATE_DIR}/skills/"*/; do
+    [[ -d "${skill_src_dir}" ]] || continue
+    skill_basename="$(basename "${skill_src_dir}")"
+    skill_dst_dir="${dir}/${skill_dir}/skills/${skill_basename}"
+    if [[ "${DRY_RUN}" == "0" ]]; then
+      mkdir -p "${skill_dst_dir}"
+    fi
 
-  update_file "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/send_mailbox.py.tmpl" \
-    "${dir}/${skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py" "${agent_name}" "${rules_filename}" "${provider}"
+    if [[ -f "${skill_src_dir}SKILL.md.tmpl" ]]; then
+      update_file "${skill_src_dir}SKILL.md.tmpl" \
+        "${skill_dst_dir}/SKILL.md" "${agent_name}" "${rules_filename}" "${provider}"
+    fi
 
-  update_file "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/read_mailbox.py.tmpl" \
-    "${dir}/${skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py" "${agent_name}" "${rules_filename}" "${provider}"
+    if [[ -d "${skill_src_dir}scripts" ]]; then
+      if [[ "${DRY_RUN}" == "0" ]]; then
+        mkdir -p "${skill_dst_dir}/scripts"
+      fi
+      for script_tmpl in "${skill_src_dir}scripts/"*.tmpl; do
+        [[ -f "${script_tmpl}" ]] || continue
+        script_basename="$(basename "${script_tmpl}" .tmpl)"
+        update_file "${script_tmpl}" \
+          "${skill_dst_dir}/scripts/${script_basename}" "${agent_name}" "${rules_filename}" "${provider}"
+        if [[ "${DRY_RUN}" == "0" ]]; then
+          chmod +x "${skill_dst_dir}/scripts/${script_basename}" 2>/dev/null || true
+        fi
+      done
+    fi
+  done
 
-  update_file "${SHARED_TEMPLATE_DIR}/skills/mailbox-operate/scripts/contacts.py.tmpl" \
-    "${dir}/${skill_dir}/skills/mailbox-operate/scripts/contacts.py" "${agent_name}" "${rules_filename}" "${provider}"
+  # Clean up legacy location: earlier deployments put bootstrap_state.py at
+  # workdir root. It now lives inside the bootstrap-sdlc skill, so the root
+  # copy is stale. Remove it so agents cannot accidentally invoke the old one.
+  if [[ -f "${dir}/bootstrap_state.py" ]]; then
+    if [[ "${DRY_RUN}" == "1" ]]; then
+      echo "  [would remove legacy] ${dir}/bootstrap_state.py"
+    else
+      rm -f "${dir}/bootstrap_state.py"
+      echo "  [removed legacy] ${dir}/bootstrap_state.py"
+    fi
+  fi
 
   # ── Mailbox migration: ensure new directory structure exists ──
   if [[ "${DRY_RUN}" == "0" ]]; then
@@ -413,10 +446,8 @@ EOF_CONTACTS
   if [[ "${DRY_RUN}" == "0" ]]; then
     chmod +x "${dir}/stop-agent.sh" "${dir}/status-agent.sh" \
       "${dir}/web_ui_server.py" \
-      "${dir}/${skill_dir}/skills/mailbox-operate/scripts/send_mailbox.py" \
-      "${dir}/${skill_dir}/skills/mailbox-operate/scripts/read_mailbox.py" \
-      "${dir}/${skill_dir}/skills/mailbox-operate/scripts/contacts.py" \
       2>/dev/null || true
+    # Skill scripts are chmod'd inside the skill-update loop above.
 
     if [[ "${provider}" == "codex" ]]; then
       chmod +x "${dir}/run_codex.mjs" "${dir}/start-codex.sh" 2>/dev/null || true

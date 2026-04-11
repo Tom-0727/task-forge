@@ -6,11 +6,11 @@ Based on the design spec in [DESIGNS.md](./DESIGNS.md).
 
 ## Quick Start
 
-Single deployment entrypoint: `bootstrap-runtime`.
+Single deployment entrypoint: `deploy-agent`.
 One command creates workspace, installs deps, seeds goal plus first instruction, and starts runtime.
 
 ```bash
-./bootstrap-runtime \
+./deploy-agent \
   --goal "检查自己的所有机制是否正常，检查 skills 机制是否有 mailbox-operate 和 skill-creator；另外检查 Subagent机制是否可正常使用" \
   --first-instruction "先检查当前 workspace 的关键机制是否正常，并把发现的问题按优先级写进 mailbox" \
   --agent-name "SelfCheckBotCc" \
@@ -31,12 +31,12 @@ Templates are split by ownership at the repository root:
 - `providers/codex/` — Codex runtime templates
 - `providers/claude/` — Claude runtime templates
 
-`bootstrap-runtime` is now the only scaffolding entrypoint; `create-agent` has been removed.
+`deploy-agent` is now the only scaffolding entrypoint; `create-agent` has been removed.
 
 ## What Gets Created
 
-`bootstrap-runtime --provider codex` creates a Codex workspace.  
-`bootstrap-runtime --provider claude` creates a Claude workspace.
+`deploy-agent --provider codex` creates a Codex workspace.  
+`deploy-agent --provider claude` creates a Claude workspace.
 
 Common files in both:
 
@@ -78,15 +78,15 @@ Also included:
 - `Memory/knowledge/<AGENTS.md|CLAUDE.md>` / `Memory/episodes/<AGENTS.md|CLAUDE.md>` / `tool-notes/<AGENTS.md|CLAUDE.md>` / `mailbox/<AGENTS.md|CLAUDE.md>` — provider-scoped directory rules
 - `mailbox_bridge.env.example` — bridge environment template
 
-If `mailbox_bridge.env` exists, generated runner scripts invoked by `bootstrap-runtime` will start the Feishu bridge automatically.
+If `mailbox_bridge.env` exists, generated runner scripts invoked by `deploy-agent` will start the Feishu bridge automatically.
 
-## Bootstrap Runtime
+## Deploy Agent
 
-`bootstrap-runtime` is the only supported deployment entrypoint.
+`deploy-agent` is the only supported deployment entrypoint.
 It requires an explicit interaction mode:
 
 ```bash
-./bootstrap-runtime \
+./deploy-agent \
   --goal "Goal text" \
   --first-instruction "First instruction text" \
   --agent-name "ResearchBot" \
@@ -115,9 +115,9 @@ Rules:
 
 ## Design
 
-- **Single bootstrap deployment entrypoint** — create/start via `bootstrap-runtime`
+- **Single deployment entrypoint** — create/start via `deploy-agent`
 - **Provider-separated templates** — `shared/` + `providers/<provider>/`
-- **Provider-specific launchers managed internally** — bootstrap orchestrates workspace runner scripts
+- **Provider-specific launchers managed internally** — `deploy-agent` orchestrates workspace runner scripts
 - **Codex runtime on the official Codex SDK** — same auth model as Codex CLI, resumable threads, streamed events
 - **Self-contained provider skills** — Codex loads `.agents/skills`, Claude loads `.claude/skills`, each with SKILL.md + scripts in one directory
 - **Heartbeat in provider-specific runners, not in the agent** — agent does work, launcher handles scheduling

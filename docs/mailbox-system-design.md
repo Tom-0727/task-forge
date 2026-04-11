@@ -292,7 +292,7 @@ connect/disconnect 不在 skills 中，由 human 通过 platform 前端操作。
 2. `pending_human.json` → `pending_messages/human.json`
 3. `awaiting_human` → `awaiting_reply/human`
 4. `mailbox_read_human_last_id` → `mailbox_read_last_id/human`
-5. bootstrap-runtime 中创建新目录结构
+5. deploy-agent 中创建新目录结构
 6. 所有引用上述路径的代码同步更新（run_claude.py, run_codex.mjs, platform_server.py, feishu_bridge 等）
 
 ## Resolved Decisions

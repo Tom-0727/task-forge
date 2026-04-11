@@ -1,0 +1,128 @@
+---
+name: bootstrap-sdlc
+description: Gate mechanism that forces {{AGENT_NAME}} through a product→design→implementation cycle before it is allowed to do business work. Read this whenever `bootstrap_state.py phase` returns `prd` or `design`.
+---
+
+# bootstrap-sdlc — {{AGENT_NAME}}
+
+Three sections, one per audience — read the one that applies to you: **Protocol** (main agent), **Planning Mode** (episode planner), **Evaluation Criteria** (episode evaluator). Phase is checked via `uv run python {{PROVIDER_SKILLS_DIR}}/bootstrap-sdlc/scripts/bootstrap_state.py phase`.
+
+---
+
+## Protocol (read by the main agent)
+
+### Phase semantics
+
+- `prd` — you may only produce / refine the PRD artifact. The PRD stays product-scoped (target users, problem statement, success criteria, non-goals, hard constraints) and must NOT contain architecture or technology choices.
+- `design` — the PRD is locked. You may produce / refine the architecture and assumptions artifacts. You may NOT edit the PRD or write business implementation code.
+- `done` — bootstrap gate is released. Normal heartbeat rules apply.
+
+Runtime, language, and package manager are fixed by the harness (uv + Python for Claude, Node.js for Codex) — treat them as given context, not as decisions to record in either artifact. Only record technology choices the agent actually has freedom over (external libraries, storage format, API schemas, etc.).
+
+### The three artifacts
+
+All bootstrap output lives in exactly three files under `Memory/knowledge/conceptual/`:
+
+- `conceptual--bootstrap--prd.md` — product spec, owned by phase `prd`
+- `conceptual--bootstrap--architecture.md` — technical design (module boundaries, data flow, key interfaces, technology choices with rationale), owned by phase `design`
+- `conceptual--bootstrap--assumptions.md` — every load-bearing assumption extracted from PRD + architecture, each entry tracking `status` (`unverified` / `verified`), `verification` method, `evidence` (file path, URL, or literal command output), and `verified_at`, owned by phase `design`
+
+Each file uses the standard knowledge-note frontmatter (`name`, `description`, `kind: conceptual`). Keep them small and single-purpose; do NOT merge them.
+
+### What you are NOT allowed to write during bootstrap
+
+While phase is `prd` or `design`, the only files you may create or modify are:
+
+- the three bootstrap artifacts above
+- the current episode file under `Memory/episodes/YYYY/MM/`
+- the mailbox (via the mailbox-operate skill)
+- `Runtime/bootstrap_state.json` — and only via `bootstrap_state.py advance` / `reset`, never by hand
+
+Any other write is forbidden and will be rejected by the evaluator.
+
+### How to advance a phase
+
+Phase transitions require explicit human approval via mailbox — never advance on your own judgment.
+
+1. When the artifact(s) for the current phase look complete, send `mailbox-operate send --await-reply` to the human referencing the artifact file(s) and asking for approval to advance.
+2. When the reply arrives and is unambiguous approval, run `bootstrap_state.py advance --to <next_phase> --approver human --note "approved via mail.<mailbox_id>"`. The `note` MUST cite the real mailbox_id — the evaluator cross-checks it.
+
+### How to reset (rare, human-only)
+
+If the human explicitly instructs you to re-bootstrap (e.g. after a major goal change), run `bootstrap_state.py reset --approver human --note "reset requested in mail.<mailbox_id>"`. Never reset on your own judgment.
+
+---
+
+## Planning Mode (read by the episode planner)
+
+Your job is to plan one bootstrap-advancing episode, not implementation work.
+
+### Context to load
+
+1. Run `uv run python {{PROVIDER_SKILLS_DIR}}/bootstrap-sdlc/scripts/bootstrap_state.py show` for full state.
+2. Read whichever of the three bootstrap artifacts already exist.
+3. Read `Runtime/goal` to anchor the PRD scope.
+4. Read the most recent 2–3 episodes to know what was already drafted or verified.
+
+### Objective selection — phase = prd
+
+Choose the single most valuable next PRD advance:
+
+- If no PRD file exists: objective is "draft the initial PRD skeleton with target users, problem statement, success criteria, non-goals, hard constraints".
+- If PRD exists but a section is weak or missing: objective is to refine exactly that section, with a clear done criterion.
+- If the PRD looks solid and complete: objective is "send the PRD to the human via mailbox-send --await-reply and request approval".
+- The mailbox brief reports a fresh human approval message: objective is "advance bootstrap phase from prd to design via bootstrap_state.py after confirming the approval message content".
+
+### Objective selection — phase = design
+
+- If architecture file is empty or very thin: objective is "draft the architecture skeleton: module boundaries, data flow, key interfaces, technology choices with rationale".
+- If architecture exists but assumptions file is missing or empty: objective is "extract every load-bearing assumption from the PRD and architecture into the assumptions file, each with `status: unverified`".
+- If there are any `status: unverified` assumptions: objective is to verify one high-risk assumption (the one most likely to invalidate the design if wrong) via a concrete method — read docs, grep, run a tiny script, or fetch an authoritative URL — and record the evidence in the assumptions file. One per episode.
+- If all assumptions are verified and architecture is solid: objective is "send architecture + assumptions to the human via mailbox-send --await-reply and request design approval".
+- If the mailbox brief reports a fresh human approval message: objective is "advance bootstrap phase from design to done via bootstrap_state.py after confirming the approval message content".
+
+### Episode scaffolding
+
+Create the episode file normally under `Memory/episodes/YYYY/MM/` using the standard schema. In the Context Snapshot, always include:
+
+- `bootstrap_phase: <current phase>`
+- the artifact path(s) relevant to this episode
+
+In `execution_guidance`, always include these constraints:
+
+- "Bootstrap is ACTIVE (phase=<phase>). You may only touch the bootstrap artifacts and `bootstrap_state.py`. Do not write any other files. Use the `bootstrap-sdlc` skill (Protocol section) for the full rules."
+- the specific artifact path to edit
+- for assumption-verification episodes: name the single assumption to verify and the verification method
+
+### Planner bootstrap rules
+
+- Never plan a phase advance unless a fresh human approval message is in the mailbox brief.
+- If nothing productive can be planned (e.g. waiting for human approval and no reply yet), the correct objective is "confirm the outstanding await-reply is still pending and end the heartbeat" — a deliberately small no-op episode.
+
+---
+
+## Evaluation Criteria (read by the episode evaluator)
+
+These checks are stricter than normal — bootstrap artifacts become load-bearing context for every future heartbeat, so sloppy drafts poison the well.
+
+### Scope policing (both phases)
+
+- The episode MUST NOT have written any file outside the allowlist stated in the Protocol section above. Any other writes are an automatic FAIL with a required fix to revert them.
+- The episode MUST NOT have advanced `bootstrap_state.py` unless the episode objective was explicitly a phase advance AND the description names the specific mailbox_id of the human approval message. Open the mailbox file and verify the approval exists and is recent. If not, FAIL.
+
+### phase = prd specific
+
+- If the episode claims to have drafted or refined the PRD: confirm the PRD file exists at the canonical path, has the standard knowledge frontmatter, and the sections mentioned in the description actually appear in the file. Spot-check by reading.
+- The PRD file must NOT contain architecture details or implementation choices. If it does, FAIL with a required fix to remove them and re-file them elsewhere once phase=design opens.
+- The architecture and assumptions files should not yet exist. If the episode created them, FAIL with a required fix to delete them.
+
+### phase = design specific
+
+- If the episode claims to have drafted architecture: spot-check that module boundaries, data flow, and key interfaces are actually present — not just headings with empty sections. Empty sections or speculative filler are FAIL.
+- If the episode claims to have verified an assumption: open the assumptions file and confirm the assumption's entry has non-empty `verification`, non-empty `evidence` (a file path, URL, or literal command output), and `verified_at` set. Empty or vague evidence ("checked and seems fine") is FAIL. Independently re-run the evidence check when cheap (re-read the cited file, re-grep, re-fetch the URL).
+- If the description says the assumption was verified but the file was not updated with evidence, FAIL.
+- For design-approval-request episodes: verify the mailbox actually contains a recent `--await-reply` message to the human that references the architecture and assumptions files. If not, FAIL.
+
+### Required-fix style in bootstrap mode
+
+Bootstrap fixes must be especially concrete: cite exact line ranges, file paths, and the exact value or command to use — not generic instructions.

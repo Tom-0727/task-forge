@@ -26,7 +26,7 @@ from registry import (
 )
 
 HARNESS_DIR = Path(__file__).resolve().parent.parent
-BOOTSTRAP_SCRIPT = HARNESS_DIR / "bootstrap-runtime"
+DEPLOY_SCRIPT = HARNESS_DIR / "deploy-agent"
 PLATFORM_DIR = Path(__file__).resolve().parent
 PLATFORM_ENV_FILE = PLATFORM_DIR / ".env"
 
@@ -535,9 +535,9 @@ def api_agents_create():
 
     workdir_path = Path(workdir).expanduser().resolve()
 
-    # Build bootstrap-runtime command
+    # Build deploy-agent command
     cmd = [
-        str(BOOTSTRAP_SCRIPT),
+        str(DEPLOY_SCRIPT),
         "--goal", goal,
         "--first-instruction", first_instruction,
         "--provider", provider,
@@ -572,12 +572,12 @@ def api_agents_create():
         )
         if result.returncode != 0:
             return jsonify({
-                "error": "bootstrap-runtime failed",
+                "error": "deploy-agent failed",
                 "stderr": result.stderr[-500:] if result.stderr else "",
                 "stdout": result.stdout[-500:] if result.stdout else "",
             }), 500
     except subprocess.TimeoutExpired:
-        return jsonify({"error": "bootstrap-runtime timed out"}), 500
+        return jsonify({"error": "deploy-agent timed out"}), 500
 
     # Resolve actual agent name from Runtime/
     resolved_name = agent_name

@@ -17,6 +17,8 @@ Your prompt contains:
 
 The description is your primary evaluation input. Read the episode file for the stated `objective` and any Context Snapshot, then weigh the description against that objective.
 
+Check bootstrap phase first. Run `uv run python {{PROVIDER_SKILLS_DIR}}/bootstrap-sdlc/scripts/bootstrap_state.py phase` via shell. If the output is `prd` or `design`, use the `bootstrap-sdlc` skill and apply the stricter rules in its Evaluation Criteria section in addition to the normal protocol below.
+
 ## Evaluation Protocol
 
 ### Step 1 — Anchor on the Objective
@@ -73,4 +75,5 @@ On PASS, `required_fixes` may be empty or contain clearly optional suggestions m
 - Stay focused on this episode's own objective.
 - Keep the final output compact. Do not echo back the description.
 - Do not mutate workspace files.
+
 """

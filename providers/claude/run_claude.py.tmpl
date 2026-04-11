@@ -38,6 +38,7 @@ AWAITING_REPLY_DIR = RUNTIME_DIR / "awaiting_reply"
 RATELIMIT_FILE = RUNTIME_DIR / "ratelimit.json"
 INTERVAL_FILE = RUNTIME_DIR / "interval"
 WORK_SCHEDULE_FILE = RUNTIME_DIR / "work_schedule.json"
+BOOTSTRAP_STATE_FILE = RUNTIME_DIR / "bootstrap_state.json"
 
 sys.path.insert(0, str(AGENT_DIR))
 from mailbox_io import load_pending_messages, clear_pending_message
@@ -199,11 +200,47 @@ async def sleep_with_wakeup(minutes: int):
         slept += 1
 
 
+# ─── Bootstrap state ─────────────────────────────────────────────────
+
+def read_bootstrap_phase() -> str:
+    """Return the current bootstrap phase, or "done" when bootstrap is not active."""
+    if not BOOTSTRAP_STATE_FILE.exists():
+        return "done"
+    try:
+        data = json.loads(BOOTSTRAP_STATE_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return "done"
+    if not isinstance(data, dict):
+        return "done"
+    phase = data.get("phase")
+    if phase not in ("prd", "design", "done"):
+        return "done"
+    return phase
+
+
+def build_bootstrap_notice(phase: str) -> str:
+    """Return a short reminder block when bootstrap is still active.
+    The full protocol lives in the bootstrap-sdlc skill; this notice just
+    forces the agent to read it before doing anything else."""
+    if phase == "done":
+        return ""
+    return (
+        f"BOOTSTRAP ACTIVE — phase: {phase}\n"
+        "You are NOT allowed to do business implementation work this heartbeat. "
+        "Before any other action, use the `bootstrap-sdlc` skill and obey its "
+        "Protocol section in full. Only the files permitted there may be written "
+        "this heartbeat.\n\n"
+    )
+
+
 # ─── Prompt building ─────────────────────────────────────────────────
 
 def build_prompt(first_heartbeat: bool, mailbox_status: str) -> str:
+    bootstrap_phase = read_bootstrap_phase()
+    bootstrap_notice = build_bootstrap_notice(bootstrap_phase)
     if mailbox_status:
         return (
+            f"{bootstrap_notice}"
             "New mailbox messages have arrived.\n\n"
             f"{mailbox_status}\n\n"
             "1. Run: uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --summary\n"
@@ -215,8 +252,10 @@ def build_prompt(first_heartbeat: bool, mailbox_status: str) -> str:
 
     if first_heartbeat:
         return (
+            f"{bootstrap_notice}"
             "You are {{AGENT_NAME}}. This is your first heartbeat.\n\n"
-            "Read CLAUDE.md to understand your behavioral rules.\n"
+            "Read CLAUDE.md to understand your behavioral rules, including the "
+            "Bootstrap Protocol that gates your first phases of work.\n"
             "Read your mailbox: uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py\n"
             "For mailbox operations, run scripts directly via Bash (see CLAUDE.md Skills Usage section).\n"
             "If you need to pause for a reply, use send_mailbox.py with --await-reply.\n"
@@ -225,6 +264,7 @@ def build_prompt(first_heartbeat: bool, mailbox_status: str) -> str:
         )
     else:
         return (
+            f"{bootstrap_notice}"
             "Heartbeat wakeup for {{AGENT_NAME}}. No new mailbox messages.\n\n"
             "Continue your current work per CLAUDE.md. Do not run read_mailbox.py — "
             "the wake-up signal is authoritative about fresh mailbox state.\n\n"

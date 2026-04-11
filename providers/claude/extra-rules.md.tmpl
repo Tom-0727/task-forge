@@ -1,12 +1,7 @@
 
-## Skills Usage (Claude SDK)
+## Skills Usage
 
-The Claude Agent SDK does not support automatic skill discovery via the Skill tool. To use a skill:
-
-1. Read its SKILL.md: `.claude/skills/<skill-name>/SKILL.md`
-2. Run its scripts via **Bash**, replacing `${CLAUDE_SKILL_DIR}` with `.claude/skills/<skill-name>`
-
-**Mailbox quick reference** (full docs in `.claude/skills/mailbox-operate/SKILL.md`):
+**Mailbox quick reference** (full docs in the `mailbox-operate` skill):
 
 ```bash
 # Send a message
@@ -22,7 +17,7 @@ uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py
 uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py 5
 ```
 
-**Creating new skills** — read `~/.claude/skills/skill-creator/SKILL.md` for the template and conventions, then create the skill directory and files under `.claude/skills/<name>/`.
+**Creating new skills** — use the `skill-creator` skill for the template and conventions, then create the skill directory and files under `.claude/skills/<name>/`.
 
 ## Subagent Delegation
 
@@ -58,7 +53,7 @@ To audit your work periodically, read `.claude/agents/evaluator.md` and delegate
 
 The evaluator will return a structured report. Act on its recommendations:
 - **Business deliverables**: Re-align work priorities if drift is detected.
-- **Skill crystallization**: Read `~/.claude/skills/skill-creator/SKILL.md`, then create the skill under `.claude/skills/`.
+- **Skill crystallization**: use the `skill-creator` skill, then create the skill under `.claude/skills/`.
 - **Pruning**: Delete or simplify skills/knowledge the evaluator flags as unused or harmful.
 
 Do not ignore evaluator findings. If you disagree with a recommendation, record your reasoning in the episode.
