@@ -3,6 +3,7 @@
 Thumbs.db
 tmp/
 platform/Runtime/platform.pid
+platform/.usage_cache.json
 
 # Editors / IDE
 .vscode/

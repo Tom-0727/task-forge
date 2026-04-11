@@ -7,7 +7,7 @@
 核心能力：
 
 - 一览所有运行中/已停止的 Agent，每个 Agent 是一张卡片
-- Claude Rate Limit 看板（Codex SDK 暂不暴露 rate limit，后续补充）
+- LLM 配额看板（通过 `claude` / `codex` CLI 的 `/status` 每小时抓取一次）
 - 从 UI 启动新 Agent（替代命令行 `deploy-agent`）
 - 点击 Agent 卡片进入其 Mailbox，直接交互
 
@@ -27,7 +27,7 @@
 ```
 Platform Server (单进程，单端口)
 ├── Frontend (SPA)
-│   ├── Dashboard 页 —— Agent 卡片列表 + Rate Limit 看板
+│   ├── Dashboard 页 —— Agent 卡片列表 + LLM 配额看板
 │   └── Agent 详情页 —— Mailbox 交互界面（复用现有 web_ui_server 的前端逻辑）
 ├── Backend API
 │   ├── /api/agents —— Agent 列表（含实时状态）
@@ -37,7 +37,7 @@ Platform Server (单进程，单端口)
 │   ├── /api/agents/:name/stop —— 停止 Agent
 │   ├── /api/agents/create —— 启动新 Agent
 │   ├── /api/agents/import —— 导入已有 Agent
-│   └── /api/ratelimit —— Claude Rate Limit 快照
+│   └── /api/usage —— Claude + Codex 配额快照（后台每小时刷新）
 └── Agent Registry (JSON 文件)
     └── 记录所有已注册 Agent 的 workdir、provider、创建时间等
 ```
@@ -107,7 +107,7 @@ Agent 的实时状态不存储在 Registry 中，而是每次请求时从 Agent 
 - `Runtime/awaiting_human` → 是否等待人类回复
 - `mailbox/MAILBOX.jsonl` → 最新消息摘要
 
-## 4. Dashboard 页（Agent 列表 + Rate Limit 看板）
+## 4. Dashboard 页（Agent 列表 + LLM 配额看板）
 
 ### 4.1 布局
 
@@ -115,11 +115,12 @@ Agent 的实时状态不存储在 Registry 中，而是每次请求时从 Agent 
 ┌──────────────────────────────────────────────────────┐
 │  Agent Platform                        [+ New Agent] │
 ├──────────────────────────────────────────────────────┤
-│  Claude Rate Limit                                   │
-│  ┌──────────────────────────────────────────────┐    │
-│  │ ▓▓▓▓▓▓▓▓░░ 82%    Resets at 14:32           │    │
-│  │ Window: five_hour  Status: allowed_warning   │    │
-│  └──────────────────────────────────────────────┘    │
+│  LLM Quota            Updated 14:00 · refreshes hourly │
+│  ┌─────────────────────┐  ┌─────────────────────┐    │
+│  │ Claude              │  │ Codex      gpt-5.4  │    │
+│  │ Session  ▓▓▓▓░ 83%  │  │ 5h      ▓▓▓▓▓ 98%  │    │
+│  │ Week     ▓▓▓░░ 78%  │  │ Weekly  ▓▓▓▓▓ 98%  │    │
+│  └─────────────────────┘  └─────────────────────┘    │
 │  Active: 3 / 5 agents                                │
 ├──────────────────────────────────────────────────────┤
 │  Agents                              [Filter] [Sort] │
@@ -152,47 +153,54 @@ Agent 的实时状态不存储在 Registry 中，而是每次请求时从 Agent 
 - **点击卡片** → 进入 Agent 详情页（Mailbox）
 - **卡片右上角菜单** → 暂停 / 恢复 / 停止 / 删除（从 Registry 移除，不删文件）
 
-### 4.4 Rate Limit 看板
+### 4.4 LLM 配额看板
 
-目标：展示 Claude 的**剩余可用额度**，对齐 Claude Code `/status` 的体验。
+目标：展示 Claude 与 Codex 的**剩余可用额度**，对齐 `claude /status` 与 `codex /status` 的体验。
 
 #### 4.4.1 数据来源
 
-`claude-agent-sdk` 在 `query()` 流中直接发射 `RateLimitEvent`，包含 `RateLimitInfo`：
+Claude / Codex SDK 均未暴露稳定的 rate-limit / quota 事件。平台改用各自 CLI 的 `/status` 命令作为唯一可靠数据源：
 
-```python
-@dataclass
-class RateLimitInfo:
-    status: RateLimitStatus        # "allowed_warning" | "rejected"
-    resets_at: int | None          # Unix timestamp，重置时间
-    rate_limit_type: str | None    # 哪个限额窗口
-    utilization: float | None      # 0.0 - 1.0，已用百分比
-```
+- `tmp/capture_claude_usage_tmux.sh` 启动一个临时 tmux session 运行 `claude`，发送 `/status` 并抓取 Usage 面板文本。
+- `tmp/capture_codex_status_tmux.sh` 同理，启动 `codex` 并抓取 `/status` 面板。
 
-SDK 底层是通过 `SubprocessCLITransport` spawn claude CLI 子进程通信，CLI 在 rate limit 状态变化时发射此事件。
+两段脚本产出的都是带盒线字符的纯文本快照。
 
 #### 4.4.2 采集方式
 
-`run_claude.py` 在 `async for message in query()` 循环中捕获 `RateLimitEvent`，将最新的 `RateLimitInfo` 写入 `Runtime/ratelimit.json`：
+`platform/usage.py` 以 subprocess 方式调用上述两个脚本，再对输出做正则解析：
+
+- Claude：抓 `Current session` / `Current week` 段落，解析 `N% used` 和 `Resets …`。
+- Codex：去掉 `│` 等盒线字符后，抓 `Model:`、`5h limit: … N% left`、`Weekly limit: … N% left`、`(resets …)`；以 `Spark limit:` 行作为分割点，把默认模型和 Spark 额度分开。
+
+解析结果写入内存缓存 + `platform/.usage_cache.json`，后台常驻线程每小时刷新一次。
 
 ```json
 {
-  "ts": "2026-03-30T14:20:00Z",
-  "provider": "claude",
-  "status": "allowed_warning",
-  "utilization": 0.82,
-  "resets_at": 1743348720,
-  "rate_limit_type": "five_hour"
+  "updated_at": "2026-04-12T00:07:00Z",
+  "claude": {
+    "session_percent_used": 20,
+    "session_resets": "1am (Asia/Singapore)",
+    "week_percent_used": 23,
+    "week_resets": "Apr 13, 1pm (Asia/Singapore)"
+  },
+  "codex": {
+    "model": "gpt-5.4",
+    "5h_percent_left": 98,
+    "5h_resets": "00:13 on 12 Apr",
+    "weekly_percent_left": 98,
+    "weekly_resets": "09:00 on 17 Apr",
+    "spark": {
+      "5h_percent_left": 100,
+      "5h_resets": "04:59 on 12 Apr",
+      "weekly_percent_left": 100,
+      "weekly_resets": "23:59 on 18 Apr"
+    }
+  }
 }
 ```
 
-平台从各 Agent 的 `Runtime/ratelimit.json` 读取最新值聚合展示。多个 Claude Agent 共享同一个 Claude 账号的 rate limit，取最新的 `ts` 对应的值即可。
-
-#### 4.4.3 Codex
-
-Codex SDK（`@openai/codex-sdk`）的 `ThreadEvent` 联合类型中没有 rate limit 事件。`TurnCompletedEvent.usage` 只有已消耗的 `input_tokens`、`cached_input_tokens`、`output_tokens`，没有 limit/remaining 信息。
-
-Codex Rate Limit 看板暂不实现。后续如果 SDK 暴露了相关信息再补充。
+前端把 Claude 的 `% used` 换算成“剩余百分比”以统一配色，进度条 <25% 转 warn、<10% 转 danger。
 
 ## 5. Agent 详情页（Mailbox）
 
@@ -346,54 +354,13 @@ POST /api/agents/:name/send     {"message": "..."}
 POST /api/agents/:name/stop
 ```
 
-### 7.6 Rate Limit
+### 7.6 LLM 配额
 
 ```
-GET /api/ratelimit
+GET /api/usage
 ```
 
-从所有 Claude Agent 的 `Runtime/ratelimit.json` 中取 `ts` 最新的一条返回：
-
-```json
-{
-  "claude": {
-    "status": "allowed_warning",
-    "utilization": 0.82,
-    "resets_at": 1743348720,
-    "rate_limit_type": "five_hour",
-    "last_updated": "2026-03-30T14:20:00Z",
-    "source_agent": "security-auditor"
-  }
-}
-```
-
-## 8. Rate Limit 采集
-
-### 8.1 改动点
-
-只需改动 `run_claude.py`：
-
-在 `async for message in query()` 循环中增加对 `RateLimitEvent` 的处理：
-
-```python
-from claude_agent_sdk import RateLimitEvent
-
-async for message in query(prompt=prompt, options=options):
-    if isinstance(message, RateLimitEvent):
-        info = message.rate_limit_info
-        ratelimit = {
-            "ts": utcnow(),
-            "provider": "claude",
-            "status": info.status,
-            "utilization": info.utilization,
-            "resets_at": info.resets_at,
-            "rate_limit_type": info.rate_limit_type,
-        }
-        RATELIMIT_FILE.write_text(json.dumps(ratelimit))
-    # ... existing AssistantMessage / ResultMessage handling
-```
-
-改动量：约 10 行代码。
+返回后台缓存的 `claude` + `codex` 快照。格式见 §4.4.2。
 
 ## 9. 文件结构
 
@@ -417,12 +384,12 @@ platform/
 - Agent 详情页（Mailbox 交互，复用现有逻辑）
 - 手动导入已有 Agent
 
-### Phase 2：创建与 Rate Limit
+### Phase 2：创建与配额看板
 
 - 从 UI 创建 Agent（调用 deploy-agent）
 - `--interaction platform` 模式
-- Rate Limit 采集（改动 run_claude.py，约 10 行）
-- Rate Limit 看板
+- LLM 配额采集（`platform/usage.py` 调用 `tmp/capture_*_tmux.sh`）
+- LLM 配额看板
 
 ### Phase 3：增强
 
