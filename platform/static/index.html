@@ -33,15 +33,18 @@
       min-height: 100vh;
       color: var(--ink);
       font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+      overflow-x: hidden;
       background:
         radial-gradient(circle at 12% 10%, rgba(47, 122, 95, 0.16), transparent 45%),
         radial-gradient(circle at 85% 90%, rgba(185, 122, 91, 0.16), transparent 48%),
         linear-gradient(140deg, var(--bg-0), var(--bg-1));
     }
     .app {
-      width: min(1100px, 100%);
+      width: 100%;
+      max-width: 1100px;
       margin: 0 auto;
       padding: 28px 16px 40px;
+      min-width: 0;
     }
     .top {
       display: flex;
@@ -70,6 +73,7 @@
       border-radius: 16px;
       padding: 16px;
       margin: 12px 0;
+      min-width: 0;
       background: var(--card);
       backdrop-filter: blur(6px);
       box-shadow: 0 10px 30px rgba(25, 38, 32, 0.07);
@@ -202,6 +206,7 @@
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
       gap: 12px;
+      min-width: 0;
     }
     .agent-card {
       border: 1px solid var(--line);
@@ -211,6 +216,8 @@
       cursor: pointer;
       transition: box-shadow 0.15s, transform 0.15s;
       position: relative;
+      min-width: 0;
+      max-width: 100%;
     }
     .agent-card,
     .agent-card-name,
@@ -231,10 +238,13 @@
       justify-content: space-between;
       gap: 8px;
       margin-bottom: 8px;
+      min-width: 0;
     }
     .agent-card-name {
       font-weight: 700;
       font-size: 15px;
+      flex: 1 1 auto;
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -243,6 +253,7 @@
       font-size: 12px;
       color: var(--muted);
       margin-bottom: 4px;
+      overflow-wrap: anywhere;
     }
     .agent-card-msg {
       font-size: 13px;
@@ -270,11 +281,14 @@
     .agent-card-actions {
       display: flex;
       gap: 6px;
+      flex-wrap: wrap;
       margin-top: 8px;
       padding-top: 8px;
       border-top: 1px dashed var(--line);
     }
     .card-btn {
+      flex: 1 1 96px;
+      min-width: 0;
       padding: 4px 10px;
       font-size: 11px;
       font-weight: 700;
@@ -439,8 +453,59 @@
 
     @media (max-width: 760px) {
       .top { align-items: flex-start; flex-direction: column; }
+      .top-actions { width: 100%; }
+      .top-actions .meta { width: 100%; }
       .agents-grid { grid-template-columns: 1fr; }
       .detail-status-grid { grid-template-columns: 1fr; }
+      .detail-header {
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .detail-header > h1 {
+        width: 100%;
+        overflow-wrap: anywhere;
+      }
+      .detail-header > div[style*="flex:1"] {
+        display: none;
+      }
+      .panel-head {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .app {
+        padding: 16px 10px 28px;
+      }
+      .panel {
+        padding: 12px;
+        border-radius: 14px;
+      }
+      .agent-card {
+        padding: 12px;
+      }
+      .agent-card-top {
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .agent-card-name {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
+      }
+      .badge {
+        max-width: 100%;
+        flex-shrink: 0;
+      }
+      .agent-card-info,
+      .agent-card-msg {
+        white-space: normal;
+        word-break: break-word;
+      }
+      .card-btn {
+        width: 100%;
+      }
     }
   </style>
 </head>

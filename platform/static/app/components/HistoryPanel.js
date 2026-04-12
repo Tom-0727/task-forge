@@ -10,13 +10,30 @@ export function HistoryPanel({ detail }) {
   const messages = detail.messages || [];
   const historyRef = useRef(null);
 
-  // Stick to bottom when user is already near it.
+  const prevContactRef = useRef(historyContact);
+  const initializedRef = useRef(false);
+
+  // Scroll to bottom on first load, contact switch, or when already near bottom.
   useEffect(() => {
     const el = historyRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
-  }, [messages.length, messages.length ? messages[messages.length - 1].id : '']);
+
+    const contactChanged = prevContactRef.current !== historyContact;
+    if (contactChanged) {
+      prevContactRef.current = historyContact;
+      initializedRef.current = false;
+    }
+
+    if (!initializedRef.current) {
+      // First render or contact switch: jump to bottom.
+      el.scrollTop = el.scrollHeight;
+      if (messages.length > 0) initializedRef.current = true;
+    } else {
+      // Subsequent updates: only auto-scroll if user is near bottom.
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      if (nearBottom) el.scrollTop = el.scrollHeight;
+    }
+  }, [messages.length, messages.length ? messages[messages.length - 1].id : '', historyContact]);
 
   const options = contacts.length
     ? contacts
