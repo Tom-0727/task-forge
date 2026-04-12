@@ -235,10 +235,15 @@ def _load_agent_snapshot(name: str, info: dict) -> dict:
                 "type": cinfo.get("type", "unknown"),
                 "connected_at": cinfo.get("connected_at", ""),
             })
+    passive_mode = False
+    if workdir and workdir.exists():
+        passive_mode = (workdir / "Runtime" / "passive_mode").exists()
+
     return {
         **info,
         "status": status,
         "contacts": contacts_list,
+        "passive_mode": passive_mode,
     }
 
 
@@ -557,6 +562,31 @@ def api_agent_interval(name: str):
     update_agent(name, {"interval": interval})
 
     return jsonify({"ok": True, "interval": interval})
+
+
+# ── API: Passive mode ───────────────────────────────────────────────
+
+@app.route("/api/agents/<name>/passive", methods=["POST"])
+def api_agent_passive(name: str):
+    info, workdir = _resolve_agent(name)
+    if not info:
+        return jsonify({"error": "agent not found"}), 404
+    if not workdir:
+        return jsonify({"error": "workdir not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    enabled = body.get("enabled", False)
+
+    runtime_dir = workdir / "Runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    passive_file = runtime_dir / "passive_mode"
+
+    if enabled:
+        passive_file.write_text("1")
+    else:
+        passive_file.unlink(missing_ok=True)
+
+    return jsonify({"ok": True, "passive_mode": enabled})
 
 
 # ── API: Work schedule ──────────────────────────────────────────────
@@ -1018,12 +1048,15 @@ def api_agent_detail(name: str):
         except (json.JSONDecodeError, OSError):
             schedule = None
 
+    passive_mode = (workdir / "Runtime" / "passive_mode").exists()
+
     return jsonify({
         **info,
         "status": status,
         "contacts": contacts_list,
         "messages": messages,
         "schedule": schedule,
+        "passive_mode": passive_mode,
         "history_contact": contact,
         "revision": _events_revision(),
     })

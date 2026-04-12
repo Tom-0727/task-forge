@@ -9,6 +9,8 @@ export function StatusPanel({ detail }) {
   const status = detail.status || {};
   const [intervalVal, setIntervalVal] = useState(String(detail.interval || 20));
   const [intervalResult, setIntervalResult] = useState('');
+  const [passive, setPassive] = useState(!!detail.passive_mode);
+  const [passiveResult, setPassiveResult] = useState('');
   const touched = useRef(false);
 
   // Sync from props unless the user is editing.
@@ -16,9 +18,25 @@ export function StatusPanel({ detail }) {
     if (!touched.current) setIntervalVal(String(detail.interval || 20));
   }, [detail.interval]);
 
+  useEffect(() => { setPassive(!!detail.passive_mode); }, [detail.passive_mode]);
+
   const onIntervalChange = (e) => {
     touched.current = true;
     setIntervalVal(e.target.value);
+  };
+
+  const onTogglePassive = async () => {
+    const next = !passive;
+    setPassiveResult('Saving…');
+    try {
+      await api.setPassiveMode(detail.name, next);
+      setPassive(next);
+      setPassiveResult('Saved');
+      setTimeout(() => setPassiveResult(''), 1500);
+      refreshCurrent();
+    } catch (err) {
+      setPassiveResult('Failed: ' + (err.message || 'unknown'));
+    }
   };
 
   const onSetInterval = async () => {
@@ -56,6 +74,12 @@ export function StatusPanel({ detail }) {
         <span>min</span>
         <button onClick=${onSetInterval} style="padding:4px 10px;font-size:12px">Set</button>
         <span class="meta">${intervalResult}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px">
+        <span style="color:var(--muted);font-weight:700">Passive Mode</span>
+        <button onClick=${onTogglePassive} style="padding:4px 10px;font-size:12px">${passive ? 'ON' : 'OFF'}</button>
+        <span class="meta" style="font-size:12px">Only wake on messages</span>
+        <span class="meta">${passiveResult}</span>
       </div>
       <div class="detail-status-grid">
         ${facts.map(([label, value]) => html`

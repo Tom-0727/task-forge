@@ -27,6 +27,7 @@ const AWAITING_REPLY_DIR = path.join(RUNTIME_DIR, "awaiting_reply");
 const INTERVAL_FILE = path.join(RUNTIME_DIR, "interval");
 const WORK_SCHEDULE_FILE = path.join(RUNTIME_DIR, "work_schedule.json");
 const BOOTSTRAP_STATE_FILE = path.join(RUNTIME_DIR, "bootstrap_state.json");
+const PASSIVE_MODE_FILE = path.join(RUNTIME_DIR, "passive_mode");
 
 let shutdownRequested = false;
 let currentAbortController = null;
@@ -332,6 +333,14 @@ function clearAwaitingForPending() {
 function checkAwaitingReply() {
   if (hasAnyAwaiting() && !hasAnyPending()) {
     log("Awaiting reply. No pending messages. Skipping heartbeat.");
+    return true;
+  }
+  return false;
+}
+
+function checkPassiveMode() {
+  if (fileExists(PASSIVE_MODE_FILE) && !hasAnyPending()) {
+    log("Passive mode active. No pending messages. Skipping heartbeat.");
     return true;
   }
   return false;
@@ -747,6 +756,12 @@ async function main() {
       clearAwaitingForPending();
 
       if (checkAwaitingReply()) {
+        log(`Sleeping ${interval} minutes...`);
+        await sleepWithWakeup(interval);
+        continue;
+      }
+
+      if (checkPassiveMode()) {
         log(`Sleeping ${interval} minutes...`);
         await sleepWithWakeup(interval);
         continue;

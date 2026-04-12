@@ -53,6 +53,14 @@ export function setInterval(name, interval) {
   });
 }
 
+export function setPassiveMode(name, enabled) {
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/passive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
 export function saveSchedule(name, schedule) {
   return jsonRequest(`/api/agents/${encodeURIComponent(name)}/schedule`, {
     method: 'POST',

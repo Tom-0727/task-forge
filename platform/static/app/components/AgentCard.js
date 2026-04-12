@@ -60,7 +60,7 @@ export function AgentCard({ agent }) {
         <span class=${`badge ${badge.cls}`}>${badge.text}</span>
       </div>
       <div class="agent-card-info">
-        ${agent.provider || '?'} · ${agent.interval || '?'}min · ${lastHb}
+        ${agent.provider || '?'} · ${agent.interval || '?'}min${agent.passive_mode ? ' · passive' : ''} · ${lastHb}
       </div>
       ${goal ? html`<div class="agent-card-info" style="font-style:italic">${goal.substring(0, 80)}</div>` : null}
       ${lastMsg ? html`<div class="agent-card-msg">${lastMsg}</div>` : null}
