@@ -1,984 +1,385 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
+"""Deploy (or redeploy) a long-run agent workspace as a thin shim over the central engine.
 
-set -euo pipefail
+The workspace holds only identity, memory, mailbox, and per-agent subagent/skill
+references. All runtime code lives under engine/. Shared skills are symlinked
+from engine/skills/<name> into .claude/skills/<name> (claude) or
+.agents/skills/<name> (codex) based on engine/skills/default.json.
+"""
+from __future__ import annotations
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SHARED_TEMPLATE_DIR="${SCRIPT_DIR}/shared"
-PROVIDER_TEMPLATE_ROOT="${SCRIPT_DIR}/providers"
-
-usage() {
-  cat <<'USAGE'
-Usage:
-  ./deploy-agent \
-    --goal "Goal text" \
-    --first-instruction "First instruction text" \
-    --provider codex|claude \
-    --interaction feishu|web-ui|platform \
-    --interval 20 \
-    --workdir /abs/path/to/runtime
-
-Feishu mode only:
-  --feishu-app-id xxx \
-  --feishu-app-secret yyy \
-  --feishu-chat-id oc_xxx
-
-Web UI mode only:
-  --web-ui-host 127.0.0.1 \
-  --web-ui-port 8080
-
-Example:
-  ./deploy-agent \
-    --goal "Goal text" \
-    --first-instruction "First instruction text" \
-    --provider codex \
-    --interaction feishu \
-    --interval 20 \
-    --workdir /abs/path/to/runtime \
-    --feishu-app-id xxx \
-    --feishu-app-secret yyy \
-    --feishu-chat-id oc_xxx
-
-Optional:
-  --agent-name "ResearchBot"
-  --goal-file /path/to/goal.txt
-  --allowed-user-ids open_id_1,open_id_2
-USAGE
-}
-
-GOAL=""
-GOAL_FILE=""
-FIRST_INSTRUCTION=""
-PROVIDER=""
-INTERACTION=""
-INTERVAL=""
-WORKDIR=""
-AGENT_NAME=""
-FEISHU_APP_ID=""
-FEISHU_APP_SECRET=""
-FEISHU_CHAT_ID=""
-ALLOWED_USER_IDS=""
-WEB_UI_HOST="127.0.0.1"
-WEB_UI_PORT="8080"
-RUNTIME_AGENT_NAME=""
-
-resolve_path() {
-  python3 - "$1" <<'PY'
-from pathlib import Path
-import sys
-
-print(Path(sys.argv[1]).expanduser().resolve())
-PY
-}
-
-provider_rules_filename() {
-  case "$1" in
-    codex) echo "AGENTS.md" ;;
-    claude) echo "CLAUDE.md" ;;
-    *)
-      echo "Error: unsupported provider for rules file: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
-provider_skill_root() {
-  case "$1" in
-    codex) echo ".agents" ;;
-    claude) echo ".claude" ;;
-    *)
-      echo "Error: unsupported provider for skill root: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
-provider_agent_root() {
-  case "$1" in
-    codex) echo ".codex" ;;
-    claude) echo ".claude" ;;
-    *)
-      echo "Error: unsupported provider for agent root: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
-provider_episode_planner_name() {
-  case "$1" in
-    codex) echo "episode_planner" ;;
-    claude) echo "episode-planner" ;;
-    *)
-      echo "Error: unsupported provider for planner agent: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
-provider_episode_evaluator_name() {
-  case "$1" in
-    codex) echo "episode_evaluator" ;;
-    claude) echo "episode-evaluator" ;;
-    *)
-      echo "Error: unsupported provider for evaluator agent: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
-provider_mailbox_read_summary_cmd() {
-  case "$1" in
-    codex) echo "mailbox-read --summary" ;;
-    claude) echo "uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --summary" ;;
-    *)
-      echo "Error: unsupported provider for mailbox read summary command: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
-provider_mailbox_read_contact_cmd() {
-  case "$1" in
-    codex) echo "mailbox-read --from <contact>" ;;
-    claude) echo "uv run python .claude/skills/mailbox-operate/scripts/read_mailbox.py --from <contact>" ;;
-    *)
-      echo "Error: unsupported provider for mailbox read contact command: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
-derive_agent_name() {
-  local dir="$1"
-  local name
-  name="$(basename "$dir")"
-  if [[ -z "$name" || "$name" == "/" || "$name" == "." ]]; then
-    name="task-forge-agent"
-  fi
-  echo "$name"
-}
-
-infer_agent_name_from_rules_file() {
-  local rules_file="$1"
-  local first_line
-  local name
-
-  if [[ ! -f "${rules_file}" ]]; then
-    return 1
-  fi
-
-  IFS= read -r first_line < "${rules_file}" || true
-  if [[ "${first_line}" != \#* ]]; then
-    return 1
-  fi
-
-  name="${first_line#\# }"
-  name="${name% — Agent Behavioral Rules}"
-  name="${name% - Agent Behavioral Rules}"
-  if [[ -z "${name//[[:space:]]/}" ]]; then
-    return 1
-  fi
-
-  echo "${name}"
-}
-
-infer_agent_name() {
-  local dir="$1"
-  local name
-
-  if name="$(infer_agent_name_from_rules_file "${dir}/AGENTS.md")"; then
-    echo "${name}"
-    return 0
-  fi
-
-  if name="$(infer_agent_name_from_rules_file "${dir}/CLAUDE.md")"; then
-    echo "${name}"
-    return 0
-  fi
-
-  return 1
-}
-
-resolve_runtime_agent_name() {
-  local runtime_name_file="${WORKDIR}/Runtime/agent_name"
-  local name
-
-  if [[ -f "${runtime_name_file}" ]]; then
-    name="$(tr -d '\r' < "${runtime_name_file}")"
-    if [[ -n "${name//[[:space:]]/}" ]]; then
-      echo "${name}"
-      return
-    fi
-  fi
-
-  if name="$(infer_agent_name "${WORKDIR}")"; then
-    echo "${name}"
-    return
-  fi
-
-  echo "$(derive_agent_name "${WORKDIR}")"
-}
-
-write_runtime_agent_name() {
-  local name="$1"
-  mkdir -p "${WORKDIR}/Runtime"
-  printf '%s\n' "${name}" > "${WORKDIR}/Runtime/agent_name"
-}
-
-write_runtime_goal() {
-  mkdir -p "${WORKDIR}/Runtime"
-  printf '%s\n' "${GOAL}" > "${WORKDIR}/Runtime/goal"
-}
-
-render_template() {
-  local src="$1"
-  local dst="$2"
-  local agent_name="$3"
-  local goal="$4"
-  local created_at="$5"
-  local created_date="$6"
-  local rules_filename="$7"
-
-  SRC="$src" \
-  DST="$dst" \
-  AGENT_NAME="$agent_name" \
-  GOAL="$goal" \
-  CREATED_AT="$created_at" \
-  CREATED_DATE="$created_date" \
-  RULES_FILENAME="$rules_filename" \
-  PROVIDER_SKILL_ROOT="$(provider_skill_root "${PROVIDER}")" \
-  PROVIDER_SKILLS_DIR="$(provider_skill_root "${PROVIDER}")/skills" \
-  PROVIDER_AGENTS_DIR="$(provider_agent_root "${PROVIDER}")/agents" \
-  EPISODE_PLANNER_NAME="$(provider_episode_planner_name "${PROVIDER}")" \
-  EPISODE_EVALUATOR_NAME="$(provider_episode_evaluator_name "${PROVIDER}")" \
-  MAILBOX_READ_SUMMARY_CMD="$(provider_mailbox_read_summary_cmd "${PROVIDER}")" \
-  MAILBOX_READ_CONTACT_CMD="$(provider_mailbox_read_contact_cmd "${PROVIDER}")" \
-  python3 - <<'PY'
-from pathlib import Path
+import argparse
+import json
 import os
-
-src = Path(os.environ["SRC"])
-dst = Path(os.environ["DST"])
-content = src.read_text()
-
-for key in (
-    "AGENT_NAME",
-    "GOAL",
-    "CREATED_AT",
-    "CREATED_DATE",
-    "RULES_FILENAME",
-    "PROVIDER_SKILL_ROOT",
-    "PROVIDER_SKILLS_DIR",
-    "PROVIDER_AGENTS_DIR",
-    "EPISODE_PLANNER_NAME",
-    "EPISODE_EVALUATOR_NAME",
-    "MAILBOX_READ_SUMMARY_CMD",
-    "MAILBOX_READ_CONTACT_CMD",
-):
-    content = content.replace(f"{{{{{key}}}}}", os.environ[key])
-
-dst.parent.mkdir(parents=True, exist_ok=True)
-dst.write_text(content)
-PY
-}
-
-ensure_template_sources() {
-  local provider_template_dir="${PROVIDER_TEMPLATE_ROOT}/${PROVIDER}"
-
-  if [[ ! -d "${SHARED_TEMPLATE_DIR}" ]]; then
-    echo "Error: shared templates directory not found: ${SHARED_TEMPLATE_DIR}"
-    exit 1
-  fi
-
-  if [[ ! -d "${provider_template_dir}" ]]; then
-    echo "Error: provider templates directory not found: ${provider_template_dir}"
-    exit 1
-  fi
-
-  local shared_required=(
-    "agent-rules.md.tmpl"
-    "knowledge-README.md.tmpl"
-    "episodes-README.md.tmpl"
-    "tool-notes-README.md.tmpl"
-    "mailbox-README.md.tmpl"
-    "mailbox_io.py.tmpl"
-    "mailbox_feishu_bridge.py.tmpl"
-    "web_ui_server.py.tmpl"
-    "mailbox_bridge.env.example.tmpl"
-    "stop-agent.sh.tmpl"
-    "status-agent.sh.tmpl"
-  )
-
-  # Skills are auto-discovered under shared/skills/<skill-name>/; each must
-  # provide at minimum a SKILL.md.tmpl. Individual script files are picked up
-  # by scaffold_workspace via directory traversal.
-  if [[ ! -d "${SHARED_TEMPLATE_DIR}/skills" ]]; then
-    echo "Error: shared skills directory not found: ${SHARED_TEMPLATE_DIR}/skills"
-    exit 1
-  fi
-  local skill_src
-  for skill_src in "${SHARED_TEMPLATE_DIR}/skills/"*/; do
-    [[ -d "${skill_src}" ]] || continue
-    if [[ ! -f "${skill_src}/SKILL.md.tmpl" ]]; then
-      echo "Error: skill missing SKILL.md.tmpl: ${skill_src}"
-      exit 1
-    fi
-  done
-
-  local provider_required=()
-  if [[ "${PROVIDER}" == "codex" ]]; then
-    provider_required=(
-      "run_codex.mjs.tmpl"
-      "start-codex.sh.tmpl"
-      "package.json.tmpl"
-      "requirements.txt.tmpl"
-      "agents/evaluator.toml.tmpl"
-      "agents/episode_planner.toml.tmpl"
-      "agents/episode_evaluator.toml.tmpl"
-    )
-  else
-    provider_required=(
-      "run_claude.py.tmpl"
-      "start-claude.sh.tmpl"
-      "requirements.txt.tmpl"
-      "agents/evaluator.md.tmpl"
-      "agents/episode-planner.md.tmpl"
-      "agents/episode-evaluator.md.tmpl"
-    )
-  fi
-
-  local rel
-  for rel in "${shared_required[@]}"; do
-    if [[ ! -f "${SHARED_TEMPLATE_DIR}/${rel}" ]]; then
-      echo "Error: missing shared template: ${SHARED_TEMPLATE_DIR}/${rel}"
-      exit 1
-    fi
-  done
-
-  for rel in "${provider_required[@]}"; do
-    if [[ ! -f "${provider_template_dir}/${rel}" ]]; then
-      echo "Error: missing provider template: ${provider_template_dir}/${rel}"
-      exit 1
-    fi
-  done
-}
-
-scaffold_workspace() {
-  local agent_name="$1"
-  local created_at
-  local created_date
-  local rules_filename
-  local knowledge_rules_path
-  local episodes_rules_path
-  local tool_notes_rules_path
-  local mailbox_rules_path
-  local provider_template_dir="${PROVIDER_TEMPLATE_ROOT}/${PROVIDER}"
-  local provider_skill_dir
-  local provider_agent_dir
-
-  created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  created_date="$(date -u +%Y%m%dT%H%M%SZ)"
-  rules_filename="$(provider_rules_filename "${PROVIDER}")"
-  knowledge_rules_path="${WORKDIR}/Memory/knowledge/${rules_filename}"
-  episodes_rules_path="${WORKDIR}/Memory/episodes/${rules_filename}"
-  tool_notes_rules_path="${WORKDIR}/tool-notes/${rules_filename}"
-  mailbox_rules_path="${WORKDIR}/mailbox/${rules_filename}"
-  provider_skill_dir="$(provider_skill_root "${PROVIDER}")"
-  provider_agent_dir="$(provider_agent_root "${PROVIDER}")"
-
-  mkdir -p "${WORKDIR}"
-  mkdir -p "${WORKDIR}/Memory/knowledge/factual"
-  mkdir -p "${WORKDIR}/Memory/knowledge/conceptual"
-  mkdir -p "${WORKDIR}/Memory/knowledge/heuristic"
-  mkdir -p "${WORKDIR}/Memory/knowledge/metacognitive"
-  mkdir -p "${WORKDIR}/Memory/episodes"
-  mkdir -p "${WORKDIR}/tool-notes"
-  mkdir -p "${WORKDIR}/mailbox"
-  mkdir -p "${WORKDIR}/Runtime/pending_messages"
-  mkdir -p "${WORKDIR}/Runtime/awaiting_reply"
-  mkdir -p "${WORKDIR}/Runtime/mailbox_read_last_id"
-  mkdir -p "${WORKDIR}/${provider_skill_dir}/skills"
-  mkdir -p "${WORKDIR}/${provider_agent_dir}/agents"
-
-  render_template "${SHARED_TEMPLATE_DIR}/agent-rules.md.tmpl" \
-    "${WORKDIR}/${rules_filename}" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  # Append provider-specific extra rules if the template exists
-  local extra_rules_tmpl="${provider_template_dir}/extra-rules.md.tmpl"
-  if [[ -f "${extra_rules_tmpl}" ]]; then
-    local extra_rules_tmp="${WORKDIR}/${rules_filename}.extra.tmp"
-    render_template "${extra_rules_tmpl}" \
-      "${extra_rules_tmp}" \
-      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-    cat "${extra_rules_tmp}" >> "${WORKDIR}/${rules_filename}"
-    rm -f "${extra_rules_tmp}"
-  fi
-
-  render_template "${SHARED_TEMPLATE_DIR}/knowledge-README.md.tmpl" \
-    "${knowledge_rules_path}" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  render_template "${SHARED_TEMPLATE_DIR}/episodes-README.md.tmpl" \
-    "${episodes_rules_path}" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  render_template "${SHARED_TEMPLATE_DIR}/tool-notes-README.md.tmpl" \
-    "${tool_notes_rules_path}" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  render_template "${SHARED_TEMPLATE_DIR}/mailbox-README.md.tmpl" \
-    "${mailbox_rules_path}" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  # Initialize contacts.json with human as default contact
-  cat > "${WORKDIR}/mailbox/contacts.json" <<EOF_CONTACTS
-{
-  "human": {
-    "type": "human",
-    "mailbox_file": "human.jsonl",
-    "connected_at": "${created_at}"
-  }
-}
-EOF_CONTACTS
-
-  # Initialize human.jsonl with system init message
-  echo "{\"id\":\"mail.${created_date}.000\",\"ts\":\"${created_at}\",\"from\":\"human\",\"to\":\"${agent_name}\",\"task_id\":\"task.system.init\",\"message\":\"${agent_name} initialized. Welcome. Read ${rules_filename} for your behavioral rules and begin working.\"}" \
-    > "${WORKDIR}/mailbox/human.jsonl"
-
-  render_template "${SHARED_TEMPLATE_DIR}/mailbox_io.py.tmpl" \
-    "${WORKDIR}/mailbox_io.py" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  render_template "${SHARED_TEMPLATE_DIR}/mailbox_feishu_bridge.py.tmpl" \
-    "${WORKDIR}/mailbox_feishu_bridge.py" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  render_template "${SHARED_TEMPLATE_DIR}/web_ui_server.py.tmpl" \
-    "${WORKDIR}/web_ui_server.py" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  render_template "${SHARED_TEMPLATE_DIR}/mailbox_bridge.env.example.tmpl" \
-    "${WORKDIR}/mailbox_bridge.env.example" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  render_template "${SHARED_TEMPLATE_DIR}/stop-agent.sh.tmpl" \
-    "${WORKDIR}/stop-agent.sh" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  render_template "${SHARED_TEMPLATE_DIR}/status-agent.sh.tmpl" \
-    "${WORKDIR}/status-agent.sh" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  # ── Shared skills: auto-discover every shared/skills/<skill-name>/ ──
-  # Each skill must provide SKILL.md.tmpl. Scripts under scripts/*.tmpl are
-  # rendered and chmod +x'd automatically. Adding a new skill = dropping a
-  # new directory here, no deploy-agent edit required.
-  local skill_src_dir skill_basename skill_dst script_tmpl script_basename
-  for skill_src_dir in "${SHARED_TEMPLATE_DIR}/skills/"*/; do
-    [[ -d "${skill_src_dir}" ]] || continue
-    skill_basename="$(basename "${skill_src_dir}")"
-    skill_dst="${WORKDIR}/${provider_skill_dir}/skills/${skill_basename}"
-    mkdir -p "${skill_dst}"
-
-    if [[ -f "${skill_src_dir}SKILL.md.tmpl" ]]; then
-      render_template "${skill_src_dir}SKILL.md.tmpl" \
-        "${skill_dst}/SKILL.md" \
-        "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-    fi
-
-    if [[ -d "${skill_src_dir}scripts" ]]; then
-      mkdir -p "${skill_dst}/scripts"
-      for script_tmpl in "${skill_src_dir}scripts/"*.tmpl; do
-        [[ -f "${script_tmpl}" ]] || continue
-        script_basename="$(basename "${script_tmpl}" .tmpl)"
-        render_template "${script_tmpl}" \
-          "${skill_dst}/scripts/${script_basename}" \
-          "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-        chmod +x "${skill_dst}/scripts/${script_basename}"
-      done
-    fi
-  done
-
-  # Initialize bootstrap state at phase=prd for newly deployed agents.
-  # Legacy agents without this file are treated as phase=done by the runtime.
-  # The bootstrap_state.py CLI lives in the bootstrap-sdlc skill; this file
-  # is the mutable state it reads/writes.
-  cat > "${WORKDIR}/Runtime/bootstrap_state.json" <<EOF_BOOTSTRAP
-{
-  "phase": "prd",
-  "prd_path": "Memory/knowledge/conceptual/conceptual--bootstrap--prd.md",
-  "architecture_path": "Memory/knowledge/conceptual/conceptual--bootstrap--architecture.md",
-  "assumptions_path": "Memory/knowledge/conceptual/conceptual--bootstrap--assumptions.md",
-  "created_at": "${created_at}",
-  "phase_history": [
-    {"phase": "prd", "entered_at": "${created_at}", "note": "initial bootstrap"}
-  ]
-}
-EOF_BOOTSTRAP
-
-  if [[ "${PROVIDER}" == "codex" ]]; then
-    render_template "${provider_template_dir}/run_codex.mjs.tmpl" \
-      "${WORKDIR}/run_codex.mjs" \
-      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-    render_template "${provider_template_dir}/start-codex.sh.tmpl" \
-      "${WORKDIR}/start-codex.sh" \
-      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-    render_template "${provider_template_dir}/package.json.tmpl" \
-      "${WORKDIR}/package.json" \
-      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-  else
-    render_template "${provider_template_dir}/run_claude.py.tmpl" \
-      "${WORKDIR}/run_claude.py" \
-      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-    render_template "${provider_template_dir}/start-claude.sh.tmpl" \
-      "${WORKDIR}/start-claude.sh" \
-      "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-    if [[ -d "${provider_template_dir}/agents" ]]; then
-      for agent_tmpl in "${provider_template_dir}/agents/"*.md.tmpl; do
-        [[ -f "${agent_tmpl}" ]] || continue
-        local agent_basename
-        agent_basename="$(basename "${agent_tmpl}" .tmpl)"
-        render_template "${agent_tmpl}" \
-          "${WORKDIR}/${provider_agent_dir}/agents/${agent_basename}" \
-          "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-      done
-    fi
-  fi
-
-  if [[ "${PROVIDER}" == "codex" ]]; then
-    if [[ -d "${provider_template_dir}/agents" ]]; then
-      for agent_tmpl in "${provider_template_dir}/agents/"*.toml.tmpl; do
-        [[ -f "${agent_tmpl}" ]] || continue
-        local agent_basename
-        agent_basename="$(basename "${agent_tmpl}" .tmpl)"
-        render_template "${agent_tmpl}" \
-          "${WORKDIR}/${provider_agent_dir}/agents/${agent_basename}" \
-          "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-      done
-    fi
-  fi
-
-  render_template "${provider_template_dir}/requirements.txt.tmpl" \
-    "${WORKDIR}/requirements.txt" \
-    "${agent_name}" "${GOAL}" "${created_at}" "${created_date}" "${rules_filename}"
-
-  chmod +x "${WORKDIR}/web_ui_server.py"
-  chmod +x "${WORKDIR}/stop-agent.sh"
-  chmod +x "${WORKDIR}/status-agent.sh"
-  # Skill scripts are chmod'd inside the skill-rendering loop above.
-
-  if [[ "${PROVIDER}" == "codex" ]]; then
-    chmod +x "${WORKDIR}/run_codex.mjs"
-    chmod +x "${WORKDIR}/start-codex.sh"
-  else
-    chmod +x "${WORKDIR}/run_claude.py"
-    chmod +x "${WORKDIR}/start-claude.sh"
-  fi
-}
-
-is_shared_workspace_layout() {
-  local dir="$1"
-
-  [[ -d "${dir}/mailbox" ]] &&
-  [[ -f "${dir}/mailbox/contacts.json" ]] &&
-  [[ -f "${dir}/mailbox_io.py" ]] &&
-  [[ -f "${dir}/mailbox_feishu_bridge.py" ]] &&
-  [[ -f "${dir}/web_ui_server.py" ]] &&
-  [[ -x "${dir}/stop-agent.sh" ]] &&
-  [[ -x "${dir}/status-agent.sh" ]] &&
-  [[ -d "${dir}/Memory" ]] &&
-  [[ -d "${dir}/tool-notes" ]]
-}
-
-is_provider_workspace_layout() {
-  local dir="$1"
-
-  if [[ "${PROVIDER}" == "codex" ]]; then
-    [[ -f "${dir}/AGENTS.md" ]] &&
-    [[ -f "${dir}/requirements.txt" ]] &&
-    [[ -f "${dir}/package.json" ]] &&
-    [[ -x "${dir}/start-codex.sh" ]] &&
-    [[ -x "${dir}/run_codex.mjs" ]]
-  else
-    [[ -f "${dir}/requirements.txt" ]] &&
-    [[ -x "${dir}/start-claude.sh" ]] &&
-    [[ -x "${dir}/run_claude.py" ]] &&
-    ([[ -f "${dir}/CLAUDE.md" ]] || [[ -f "${dir}/AGENTS.md" ]])
-  fi
-}
-
-is_task_forge_workspace() {
-  local dir="$1"
-  is_shared_workspace_layout "${dir}" && is_provider_workspace_layout "${dir}"
-}
-
-write_feishu_env() {
-  cat > "${WORKDIR}/mailbox_bridge.env" <<EOF_FEISHU
-FEISHU_APP_ID=${FEISHU_APP_ID}
-FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
-FEISHU_CHAT_ID=${FEISHU_CHAT_ID}
-ALLOWED_USER_IDS=${ALLOWED_USER_IDS}
-FEISHU_OUTBOUND_TASK_PREFIX=0
-FEISHU_MAILBOX_POLL_INTERVAL=1
-EOF_FEISHU
-}
-
-write_interaction_mode() {
-  mkdir -p "${WORKDIR}/Runtime"
-  printf '%s\n' "${INTERACTION}" > "${WORKDIR}/Runtime/interaction_mode"
-}
-
-ensure_workspace() {
-  if [[ ! -e "${WORKDIR}" ]]; then
-    local agent_name
-    agent_name="${AGENT_NAME}"
-    if [[ -z "${agent_name//[[:space:]]/}" ]]; then
-      agent_name="$(derive_agent_name "${WORKDIR}")"
-    fi
-
-    scaffold_workspace "${agent_name}"
-    RUNTIME_AGENT_NAME="${agent_name}"
-    write_runtime_agent_name "${RUNTIME_AGENT_NAME}"
-    return
-  fi
-
-  if ! is_task_forge_workspace "${WORKDIR}"; then
-    echo "Error: ${WORKDIR} exists but is not a compatible task-forge workspace for provider '${PROVIDER}'."
-    exit 1
-  fi
-
-  if [[ -n "${AGENT_NAME//[[:space:]]/}" ]]; then
-    echo "Warning: --agent-name is ignored because workspace already exists."
-  fi
-
-  RUNTIME_AGENT_NAME="$(resolve_runtime_agent_name)"
-  write_runtime_agent_name "${RUNTIME_AGENT_NAME}"
-}
-
-ensure_python_deps() {
-  (
-    cd "${WORKDIR}"
-    uv venv --allow-existing >/dev/null
-    uv pip install --python .venv/bin/python -r requirements.txt >/dev/null
-  )
-}
-
-ensure_node_deps() {
-  if [[ "${PROVIDER}" != "codex" ]]; then
-    return
-  fi
-
-  (
-    cd "${WORKDIR}"
-    npm install --no-fund --no-audit >/dev/null
-  )
-}
-
-seed_initial_instruction() {
-  local result
-  result="$(
-    WORKDIR="${WORKDIR}" FIRST_INSTRUCTION="${FIRST_INSTRUCTION}" uv run --no-project --python "${WORKDIR}/.venv/bin/python" - <<'PY'
-from pathlib import Path
-import os
+import shutil
+import subprocess
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
 
-root = Path(os.environ["WORKDIR"])
-first_instruction = os.environ["FIRST_INSTRUCTION"].strip()
+REPO_ROOT = Path(__file__).resolve().parent
+ENGINE_ROOT = REPO_ROOT / "engine"
+TEMPLATE_DIR = ENGINE_ROOT / "templates"
+ENGINE_SKILLS_DIR = ENGINE_ROOT / "skills"
+SKILL_DEFAULTS_FILE = ENGINE_SKILLS_DIR / "default.json"
 
-sys.path.insert(0, str(root))
-from mailbox_io import append_message, read_messages, load_contacts
+PROVIDER_CONFIG = {
+    "claude": {
+        "rules_filename": "CLAUDE.md",
+        "rules_tmpl": "CLAUDE.md.tmpl",
+        "skill_root": ".claude/skills",
+        "subagent_root": ".claude/agents",
+        "subagent_dir": "agents/claude",
+        "subagent_suffix": ".md",
+        "episode_planner_name": "episode-planner",
+        "episode_evaluator_name": "episode-evaluator",
+    },
+    "codex": {
+        "rules_filename": "AGENTS.md",
+        "rules_tmpl": "AGENTS.md.tmpl",
+        "skill_root": ".agents/skills",
+        "subagent_root": ".codex/agents",
+        "subagent_dir": "agents/codex",
+        "subagent_suffix": ".toml",
+        "episode_planner_name": "episode_planner",
+        "episode_evaluator_name": "episode_evaluator",
+    },
+}
 
-mailbox_path = root / "mailbox" / "human.jsonl"
-contacts = load_contacts(root / "mailbox" / "contacts.json")
-agent_name = contacts.get("human", {}).get("mailbox_file", "human.jsonl").replace(".jsonl", "")
 
-messages = read_messages(mailbox_path)
-has_user_goal = any(
-    msg.get("from") == "human" and msg.get("task_id") != "task.system.init"
-    for msg in messages
-)
+def utcnow_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-if has_user_goal:
-    print("skipped")
-else:
-    append_message(
-        mailbox_path,
-        from_id="human",
-        to_id="agent",
-        task_id="task.user.initial_instruction",
-        message=first_instruction,
+
+def utcnow_compact() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def render(tmpl_path: Path, replacements: dict[str, str]) -> str:
+    content = tmpl_path.read_text(encoding="utf-8")
+    for key, value in replacements.items():
+        content = content.replace("{{" + key + "}}", value)
+    return content
+
+
+def write(dst: Path, content: str, executable: bool = False) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text(content, encoding="utf-8")
+    if executable:
+        dst.chmod(0o755)
+
+
+def load_engine_version() -> str:
+    pkg = json.loads((ENGINE_ROOT / "package.json").read_text(encoding="utf-8"))
+    return pkg.get("version", "0.0.0")
+
+
+def load_default_skills(provider: str) -> list[str]:
+    defaults = json.loads(SKILL_DEFAULTS_FILE.read_text(encoding="utf-8"))
+    return defaults.get(provider, [])
+
+
+def link_default_skills(workdir: Path, provider: str) -> None:
+    cfg = PROVIDER_CONFIG[provider]
+    skills_parent = workdir / cfg["skill_root"]
+    skills_parent.mkdir(parents=True, exist_ok=True)
+    for skill_name in load_default_skills(provider):
+        src = ENGINE_SKILLS_DIR / skill_name
+        if not src.exists():
+            raise SystemExit(f"engine skill not found: {src}")
+        dst = skills_parent / skill_name
+        if dst.is_symlink() or dst.exists():
+            if dst.is_symlink() and Path(os.readlink(dst)) == src:
+                continue
+            if dst.is_symlink() or dst.is_file():
+                dst.unlink()
+            else:
+                shutil.rmtree(dst)
+        dst.symlink_to(src)
+
+
+def render_subagents(workdir: Path, provider: str, replacements: dict[str, str]) -> None:
+    cfg = PROVIDER_CONFIG[provider]
+    src_dir = TEMPLATE_DIR / cfg["subagent_dir"]
+    dst_dir = workdir / cfg["subagent_root"]
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    suffix = cfg["subagent_suffix"] + ".tmpl"
+    for tmpl in sorted(src_dir.glob(f"*{suffix}")):
+        body = render(tmpl, replacements)
+        dst = dst_dir / tmpl.name[: -len(".tmpl")]
+        write(dst, body)
+
+
+def write_agent_json(
+    workdir: Path,
+    agent_name: str,
+    provider: str,
+    interaction_mode: str,
+    web_ui_port: int | None,
+    feishu: dict | None,
+    interval: int,
+    engine_version: str,
+) -> None:
+    runtime_dir = workdir / "Runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    interaction: dict = {"mode": interaction_mode}
+    if web_ui_port is not None:
+        interaction["web_ui_port"] = web_ui_port
+    if feishu is not None:
+        interaction["feishu"] = feishu
+    identity = {
+        "schema_version": 1,
+        "agent_name": agent_name,
+        "provider": provider,
+        "created_at": utcnow_iso(),
+        "engine_version_at_create": engine_version,
+        "interaction": interaction,
+        "runtime": {
+            "default_interval_minutes": interval,
+            "default_max_turns": 400,
+            "default_max_budget_usd": 5.0,
+        },
+    }
+    (runtime_dir / "agent.json").write_text(
+        json.dumps(identity, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
     )
-    print("seeded")
-PY
-  )"
 
-  echo "${result}"
-}
 
-read_pid_file() {
-  local path="$1"
-  if [[ -f "${path}" ]]; then
-    tr -d '[:space:]' < "${path}"
-  fi
-}
+def seed_mailbox(workdir: Path, agent_name: str, created_at: str, created_date: str,
+                 first_instruction: str, rules_filename: str) -> None:
+    mailbox = workdir / "mailbox"
+    mailbox.mkdir(parents=True, exist_ok=True)
+    contacts_file = mailbox / "contacts.json"
+    if not contacts_file.exists():
+        contacts_file.write_text(
+            json.dumps(
+                {"human": {"type": "human", "mailbox_file": "human.jsonl", "connected_at": created_at}},
+                indent=2,
+                ensure_ascii=False,
+            ) + "\n",
+            encoding="utf-8",
+        )
+    human_mb = mailbox / "human.jsonl"
+    existing = human_mb.read_text(encoding="utf-8") if human_mb.exists() else ""
+    lines = [ln for ln in existing.splitlines() if ln.strip()]
+    has_init = any('"task.system.init"' in ln for ln in lines)
+    has_user_goal = any(
+        '"task.system.init"' not in ln and '"from":"human"' in ln.replace(" ", "")
+        for ln in lines
+    )
+    new_lines = list(lines)
+    if not has_init:
+        init = {
+            "id": f"mail.{created_date}.000",
+            "ts": created_at,
+            "from": "human",
+            "to": agent_name,
+            "task_id": "task.system.init",
+            "message": f"{agent_name} initialized. Welcome. Read {rules_filename} for your behavioral rules and begin working.",
+        }
+        new_lines.append(json.dumps(init, ensure_ascii=False))
+    if not has_user_goal and first_instruction.strip():
+        instr = {
+            "id": f"mail.{created_date}.001",
+            "ts": created_at,
+            "from": "human",
+            "to": agent_name,
+            "task_id": "task.user.initial_instruction",
+            "message": first_instruction.strip(),
+        }
+        new_lines.append(json.dumps(instr, ensure_ascii=False))
+    human_mb.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")
 
-is_running() {
-  local pid="$1"
-  kill -0 "${pid}" 2>/dev/null
-}
 
-ensure_started() {
-  local runner_pid
+def seed_bootstrap_state(workdir: Path, created_at: str) -> None:
+    dst = workdir / "Runtime" / "bootstrap_state.json"
+    if dst.exists():
+        return
+    dst.write_text(
+        json.dumps(
+            {
+                "phase": "prd",
+                "prd_path": "Memory/knowledge/conceptual/conceptual--bootstrap--prd.md",
+                "architecture_path": "Memory/knowledge/conceptual/conceptual--bootstrap--architecture.md",
+                "assumptions_path": "Memory/knowledge/conceptual/conceptual--bootstrap--assumptions.md",
+                "created_at": created_at,
+                "phase_history": [
+                    {"phase": "prd", "entered_at": created_at, "note": "initial bootstrap"}
+                ],
+            },
+            indent=2,
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
 
-  runner_pid="$(read_pid_file "${WORKDIR}/Runtime/pid")"
 
-  if [[ -z "${runner_pid}" ]] || ! is_running "${runner_pid}"; then
-    echo "Error: runtime failed to stay up."
-    echo "Check: ${WORKDIR}/Runtime/${PROVIDER}.log"
-    exit 1
-  fi
+def write_feishu_env(workdir: Path, feishu_app_id: str, feishu_app_secret: str,
+                     feishu_chat_id: str, allowed_user_ids: str) -> None:
+    (workdir / "mailbox_bridge.env").write_text(
+        f"FEISHU_APP_ID={feishu_app_id}\n"
+        f"FEISHU_APP_SECRET={feishu_app_secret}\n"
+        f"FEISHU_CHAT_ID={feishu_chat_id}\n"
+        f"ALLOWED_USER_IDS={allowed_user_ids}\n"
+        "FEISHU_OUTBOUND_TASK_PREFIX=0\n"
+        "FEISHU_MAILBOX_POLL_INTERVAL=1\n",
+        encoding="utf-8",
+    )
 
-  if [[ "${INTERACTION}" == "feishu" || ( "${INTERACTION}" == "platform" && -n "${FEISHU_APP_ID}" ) ]]; then
-    local bridge_pid
-    bridge_pid="$(read_pid_file "${WORKDIR}/Runtime/bridge.pid")"
-    if [[ -z "${bridge_pid}" ]] || ! is_running "${bridge_pid}"; then
-      echo "Error: Feishu bridge failed to stay up."
-      echo "Check: ${WORKDIR}/Runtime/mailbox-feishu-bridge.log"
-      exit 1
-    fi
-  fi
 
-  if [[ "${INTERACTION}" == "web-ui" ]]; then
-    local web_ui_pid
-    web_ui_pid="$(read_pid_file "${WORKDIR}/Runtime/web_ui.pid")"
-    if [[ -z "${web_ui_pid}" ]] || ! is_running "${web_ui_pid}"; then
-      echo "Error: Web UI failed to stay up."
-      echo "Check: ${WORKDIR}/Runtime/web-ui.log"
-      exit 1
-    fi
-  fi
-}
+def scaffold_workspace(workdir: Path, agent_name: str, goal: str, provider: str) -> None:
+    cfg = PROVIDER_CONFIG[provider]
+    created_at = utcnow_iso()
+    created_date = utcnow_compact()
+    replacements = {
+        "AGENT_NAME": agent_name,
+        "GOAL": goal,
+        "CREATED_AT": created_at,
+        "CREATED_DATE": created_date,
+        "EPISODE_PLANNER_NAME": cfg["episode_planner_name"],
+        "EPISODE_EVALUATOR_NAME": cfg["episode_evaluator_name"],
+    }
 
-start_web_ui() {
-  local web_ui_pid
-  local web_ui_pid_file="${WORKDIR}/Runtime/web_ui.pid"
-  local web_ui_log="${WORKDIR}/Runtime/web-ui.log"
-  local python_bin="${WORKDIR}/.venv/bin/python"
-  local web_ui_script="${WORKDIR}/web_ui_server.py"
+    for sub in (
+        "Memory/knowledge/factual",
+        "Memory/knowledge/conceptual",
+        "Memory/knowledge/heuristic",
+        "Memory/knowledge/metacognitive",
+        "Memory/episodes",
+        "tool-notes",
+        "Runtime/pending_messages",
+        "Runtime/awaiting_reply",
+        "Runtime/pids",
+        "Runtime/logs",
+        "Runtime/mailbox_read_last_id",
+    ):
+        (workdir / sub).mkdir(parents=True, exist_ok=True)
 
-  if [[ ! -f "${web_ui_script}" ]]; then
-    echo "Error: ${web_ui_script} is missing in this workspace."
-    echo "Recreate workspace with the latest shared/provider templates."
-    exit 1
-  fi
+    write(workdir / cfg["rules_filename"],
+          render(TEMPLATE_DIR / cfg["rules_tmpl"], replacements))
 
-  web_ui_pid="$(read_pid_file "${web_ui_pid_file}")"
-  if [[ -n "${web_ui_pid}" ]] && is_running "${web_ui_pid}"; then
-    return
-  fi
+    write(workdir / "Memory" / "knowledge" / "README.md",
+          render(TEMPLATE_DIR / "knowledge-README.md.tmpl", replacements))
+    write(workdir / "Memory" / "episodes" / "README.md",
+          render(TEMPLATE_DIR / "episodes-README.md.tmpl", replacements))
+    write(workdir / "tool-notes" / "README.md",
+          render(TEMPLATE_DIR / "tool-notes-README.md.tmpl", replacements))
+    write(workdir / "mailbox" / "README.md",
+          render(TEMPLATE_DIR / "mailbox-README.md.tmpl", replacements))
 
-  rm -f "${web_ui_pid_file}"
-  nohup uv run --no-project --python "${python_bin}" "${web_ui_script}" --host "${WEB_UI_HOST}" --port "${WEB_UI_PORT}" >"${web_ui_log}" 2>&1 &
-  web_ui_pid="$!"
-  echo "${web_ui_pid}" > "${web_ui_pid_file}"
-}
+    link_default_skills(workdir, provider)
+    render_subagents(workdir, provider, replacements)
+    seed_bootstrap_state(workdir, created_at)
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --goal)
-      GOAL="$2"
-      shift 2
-      ;;
-    --first-instruction)
-      FIRST_INSTRUCTION="$2"
-      shift 2
-      ;;
-    --goal-file)
-      GOAL_FILE="$2"
-      shift 2
-      ;;
-    --provider)
-      PROVIDER="$2"
-      shift 2
-      ;;
-    --interaction)
-      INTERACTION="$2"
-      shift 2
-      ;;
-    --interval)
-      INTERVAL="$2"
-      shift 2
-      ;;
-    --workdir)
-      WORKDIR="$2"
-      shift 2
-      ;;
-    --agent-name)
-      AGENT_NAME="$2"
-      shift 2
-      ;;
-    --feishu-app-id)
-      FEISHU_APP_ID="$2"
-      shift 2
-      ;;
-    --feishu-app-secret)
-      FEISHU_APP_SECRET="$2"
-      shift 2
-      ;;
-    --feishu-chat-id)
-      FEISHU_CHAT_ID="$2"
-      shift 2
-      ;;
-    --allowed-user-ids)
-      ALLOWED_USER_IDS="$2"
-      shift 2
-      ;;
-    --web-ui-host)
-      WEB_UI_HOST="$2"
-      shift 2
-      ;;
-    --web-ui-port)
-      WEB_UI_PORT="$2"
-      shift 2
-      ;;
-    --help|-h)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown argument: $1"
-      usage
-      exit 1
-      ;;
-  esac
-done
+    return created_at, created_date
 
-if [[ -n "${GOAL_FILE}" ]]; then
-  if [[ ! -f "${GOAL_FILE}" ]]; then
-    echo "Error: goal file not found: ${GOAL_FILE}"
-    exit 1
-  fi
-  GOAL="$(< "${GOAL_FILE}")"
-fi
 
-if [[ -z "${GOAL//[[:space:]]/}" ]]; then
-  echo "Error: --goal or --goal-file is required."
-  exit 1
-fi
+def resolve_interaction(raw: str, feishu_app_id: str) -> tuple[str, dict | None]:
+    if raw == "platform":
+        if feishu_app_id:
+            return "feishu", None
+        return "none", None
+    return raw, None
 
-if [[ -z "${FIRST_INSTRUCTION//[[:space:]]/}" ]]; then
-  echo "Error: --first-instruction is required."
-  exit 1
-fi
 
-if [[ "${PROVIDER}" != "codex" && "${PROVIDER}" != "claude" ]]; then
-  echo "Error: --provider must be codex or claude."
-  exit 1
-fi
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Deploy a long-run agent shim workspace.")
+    ap.add_argument("--goal")
+    ap.add_argument("--goal-file")
+    ap.add_argument("--first-instruction", required=True)
+    ap.add_argument("--provider", choices=["claude", "codex"], required=True)
+    ap.add_argument(
+        "--interaction",
+        choices=["feishu", "web-ui", "platform", "none"],
+        required=True,
+        help="platform is a compatibility alias: maps to feishu if feishu creds given, else none.",
+    )
+    ap.add_argument("--interval", type=int, required=True)
+    ap.add_argument("--workdir", required=True)
+    ap.add_argument("--agent-name")
+    ap.add_argument("--feishu-app-id", default="")
+    ap.add_argument("--feishu-app-secret", default="")
+    ap.add_argument("--feishu-chat-id", default="")
+    ap.add_argument("--allowed-user-ids", default="")
+    ap.add_argument("--web-ui-port", type=int, default=8080)
+    ap.add_argument("--no-start", action="store_true", help="scaffold only; do not launch supervisor.")
+    args = ap.parse_args()
 
-if [[ "${INTERACTION}" != "feishu" && "${INTERACTION}" != "web-ui" && "${INTERACTION}" != "platform" ]]; then
-  echo "Error: --interaction must be feishu, web-ui, or platform."
-  exit 1
-fi
+    goal = args.goal or ""
+    if args.goal_file:
+        goal = Path(args.goal_file).expanduser().read_text(encoding="utf-8")
+    if not goal.strip():
+        ap.error("--goal or --goal-file required")
+    if args.interval < 0:
+        ap.error("--interval must be non-negative")
+    if args.interaction == "feishu":
+        if not (args.feishu_app_id and args.feishu_app_secret and args.feishu_chat_id):
+            ap.error("feishu mode requires --feishu-app-id/--feishu-app-secret/--feishu-chat-id")
 
-if ! [[ "${INTERVAL}" =~ ^[0-9]+$ ]]; then
-  echo "Error: --interval must be a non-negative integer."
-  exit 1
-fi
+    workdir = Path(args.workdir).expanduser().resolve()
+    workdir.mkdir(parents=True, exist_ok=True)
 
-if [[ -z "${WORKDIR}" ]]; then
-  echo "Error: --workdir is required."
-  exit 1
-fi
+    agent_name = (args.agent_name or workdir.name).strip()
+    if not agent_name:
+        ap.error("derived agent name is empty")
 
-if [[ -n "${AGENT_NAME}" && -z "${AGENT_NAME//[[:space:]]/}" ]]; then
-  echo "Error: --agent-name cannot be empty."
-  exit 1
-fi
+    interaction_mode, _ = resolve_interaction(args.interaction, args.feishu_app_id)
+    if interaction_mode == "feishu" and not args.feishu_app_id:
+        ap.error("resolved interaction=feishu but no feishu credentials given")
 
-if [[ "${INTERACTION}" == "feishu" ]]; then
-  if [[ -z "${FEISHU_APP_ID}" || -z "${FEISHU_APP_SECRET}" || -z "${FEISHU_CHAT_ID}" ]]; then
-    echo "Error: Feishu mode requires --feishu-app-id, --feishu-app-secret, --feishu-chat-id."
-    exit 1
-  fi
-elif [[ "${INTERACTION}" == "web-ui" ]]; then
-  if [[ -n "${FEISHU_APP_ID}" || -n "${FEISHU_APP_SECRET}" || -n "${FEISHU_CHAT_ID}" || -n "${ALLOWED_USER_IDS}" ]]; then
-    echo "Error: Web UI mode must not include Feishu arguments."
-    exit 1
-  fi
-fi
-# platform mode: feishu args are optional (bridge started if provided)
+    created_at, _ = scaffold_workspace(workdir, agent_name, goal, args.provider)
+    rules_filename = PROVIDER_CONFIG[args.provider]["rules_filename"]
+    seed_mailbox(workdir, agent_name, created_at, utcnow_compact(),
+                 args.first_instruction, rules_filename)
+    (workdir / "Runtime" / "goal").write_text(goal.rstrip() + "\n", encoding="utf-8")
 
-if ! [[ "${WEB_UI_PORT}" =~ ^[0-9]+$ ]] || [[ "${WEB_UI_PORT}" -le 0 ]] || [[ "${WEB_UI_PORT}" -gt 65535 ]]; then
-  echo "Error: --web-ui-port must be an integer between 1 and 65535."
-  exit 1
-fi
+    feishu_cfg = None
+    web_ui_port = None
+    if interaction_mode == "feishu":
+        feishu_cfg = {
+            "app_id_env": "FEISHU_APP_ID",
+            "app_secret_env": "FEISHU_APP_SECRET",
+            "chat_id": args.feishu_chat_id,
+        }
+        write_feishu_env(workdir, args.feishu_app_id, args.feishu_app_secret,
+                         args.feishu_chat_id, args.allowed_user_ids)
+    if interaction_mode == "web-ui":
+        web_ui_port = args.web_ui_port
 
-WORKDIR="$(resolve_path "${WORKDIR}")"
+    write_agent_json(
+        workdir=workdir,
+        agent_name=agent_name,
+        provider=args.provider,
+        interaction_mode=interaction_mode,
+        web_ui_port=web_ui_port,
+        feishu=feishu_cfg,
+        interval=args.interval,
+        engine_version=load_engine_version(),
+    )
 
-ensure_template_sources
-ensure_workspace
-write_runtime_goal
-if [[ "${INTERACTION}" == "feishu" ]]; then
-  write_feishu_env
-elif [[ "${INTERACTION}" == "platform" && -n "${FEISHU_APP_ID}" ]]; then
-  write_feishu_env
-fi
-write_interaction_mode
-ensure_python_deps
-ensure_node_deps
+    print(f"[deploy-agent] scaffolded {workdir}")
+    print(f"  agent_name    : {agent_name}")
+    print(f"  provider      : {args.provider}")
+    print(f"  interaction   : {interaction_mode}")
+    print(f"  interval      : {args.interval}m")
 
-GOAL_STATUS="$(seed_initial_instruction)"
+    if args.no_start:
+        print("[deploy-agent] --no-start: skipping supervisor launch")
+        return 0
 
-# Determine whether to skip the feishu bridge
-SKIP_BRIDGE=0
-if [[ "${INTERACTION}" == "web-ui" ]]; then
-  SKIP_BRIDGE=1
-elif [[ "${INTERACTION}" == "platform" && -z "${FEISHU_APP_ID}" ]]; then
-  SKIP_BRIDGE=1
-fi
+    subprocess.check_call([str(ENGINE_ROOT / "bin" / "stop.sh"), "--agent-dir", str(workdir)],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    log_file = workdir / "Runtime" / "logs" / "start.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("a", encoding="utf-8") as lf:
+        subprocess.Popen(
+            [str(ENGINE_ROOT / "bin" / "start.sh"), "--agent-dir", str(workdir)],
+            stdout=lf, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+    print(f"[deploy-agent] launched supervisor in background (log: {log_file})")
+    return 0
 
-(
-  cd "${WORKDIR}"
-  ./stop-agent.sh >/dev/null 2>&1 || true
-  if [[ "${PROVIDER}" == "codex" ]]; then
-    if [[ "${SKIP_BRIDGE}" == "1" ]]; then
-      TASK_FORGE_SKIP_BRIDGE=1 ./start-codex.sh --interval "${INTERVAL}" >/dev/null
-    else
-      ./start-codex.sh --interval "${INTERVAL}" >/dev/null
-    fi
-  else
-    if [[ "${SKIP_BRIDGE}" == "1" ]]; then
-      TASK_FORGE_SKIP_BRIDGE=1 ./start-claude.sh --interval "${INTERVAL}" >/dev/null
-    else
-      ./start-claude.sh --interval "${INTERVAL}" >/dev/null
-    fi
-  fi
-)
 
-if [[ "${INTERACTION}" == "web-ui" ]]; then
-  start_web_ui
-fi
-
-sleep 2
-ensure_started
-
-echo "Runtime ready"
-echo "Workdir: ${WORKDIR}"
-echo "Agent name: ${RUNTIME_AGENT_NAME}"
-echo "Provider: ${PROVIDER}"
-echo "Interaction: ${INTERACTION}"
-echo "Interval: ${INTERVAL}"
-echo "Initial instruction seeded: ${GOAL_STATUS}"
-echo "Runner PID: $(read_pid_file "${WORKDIR}/Runtime/pid")"
-if [[ "${INTERACTION}" == "feishu" || ( "${INTERACTION}" == "platform" && -n "${FEISHU_APP_ID}" ) ]]; then
-  echo "Bridge PID: $(read_pid_file "${WORKDIR}/Runtime/bridge.pid")"
-fi
-if [[ "${INTERACTION}" == "web-ui" ]]; then
-  echo "Web UI PID: $(read_pid_file "${WORKDIR}/Runtime/web_ui.pid")"
-  echo "Web UI URL: http://${WEB_UI_HOST}:${WEB_UI_PORT}"
-fi
+if __name__ == "__main__":
+    sys.exit(main())
