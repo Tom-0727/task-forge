@@ -112,21 +112,18 @@ uv run python ${CLAUDE_SKILL_DIR}/scripts/list_scheduled.py
 uv run python ${CLAUDE_SKILL_DIR}/scripts/delete_scheduled.py --id s<n>
 ```
 
-**Not yet implemented in this slice.** The scripts above (`add_scheduled`,
-`list_scheduled`, `delete_scheduled`) and the pre-heartbeat hook
-(`pre_heartbeat.py`) are scaffolded interface contracts only; they land in
-a subsequent slice alongside the runtime integration in
-`providers/claude/run_claude.py.tmpl`.
+The pre-heartbeat hook (`pre_heartbeat.py`) that reads `scheduled_tasks.json`
+to produce `Runtime/due_reminders.json` is scaffolded separately; it lands
+alongside the runtime integration in
+`providers/claude/run_claude.py.tmpl` (out of scope for this slice).
 
 ## Convenience reader
 
 ```bash
 uv run python ${CLAUDE_SKILL_DIR}/scripts/fetch_today.py
 # prints today's todos (JSON); defaults to today, --date YYYY-MM-DD optional
+# --agent-workdir PATH optional; defaults to the current working directory
 ```
-
-**Not yet implemented in this slice.** Lands alongside the scheduled-task
-scripts.
 
 ## Storage layout
 
