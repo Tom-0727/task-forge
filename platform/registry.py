@@ -93,37 +93,26 @@ def remove_agent(name: str) -> bool:
 
 
 def import_agent(workdir: str, tags: list[str] | None = None) -> dict | None:
-    """Import an existing agent by reading its Runtime/ directory."""
+    """Import an existing agent by reading its Runtime/agent.json identity file."""
     workdir_path = Path(workdir).expanduser().resolve()
-    runtime_dir = workdir_path / "Runtime"
-
-    if not runtime_dir.exists():
+    identity_file = workdir_path / "Runtime" / "agent.json"
+    if not identity_file.exists():
         return None
 
-    # Read agent name
-    agent_name_file = runtime_dir / "agent_name"
-    if agent_name_file.exists():
-        name = agent_name_file.read_text(encoding="utf-8").strip()
-    else:
-        name = workdir_path.name
+    try:
+        identity = json.loads(identity_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if identity.get("schema_version") != 1:
+        return None
 
-    # Read provider
-    provider_file = runtime_dir / "runtime_provider"
-    if provider_file.exists():
-        provider = provider_file.read_text(encoding="utf-8").strip()
-    else:
-        provider = "unknown"
+    name = identity.get("agent_name") or workdir_path.name
+    provider = identity.get("provider", "unknown")
+    interaction = identity.get("interaction", {}).get("mode", "unknown")
+    interval = identity.get("runtime", {}).get("default_interval_minutes", 20)
 
-    # Read interaction mode
-    interaction_file = runtime_dir / "interaction_mode"
-    if interaction_file.exists():
-        interaction = interaction_file.read_text(encoding="utf-8").strip()
-    else:
-        interaction = "unknown"
-
-    # Read goal from runtime metadata
     goal = ""
-    goal_file = runtime_dir / "goal"
+    goal_file = workdir_path / "Runtime" / "goal"
     if goal_file.exists():
         try:
             goal = goal_file.read_text(encoding="utf-8").strip()
@@ -135,6 +124,7 @@ def import_agent(workdir: str, tags: list[str] | None = None) -> dict | None:
         workdir=str(workdir_path),
         provider=provider,
         goal=goal,
+        interval=interval,
         tags=tags or ["imported"],
         interaction=interaction,
     )

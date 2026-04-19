@@ -1,0 +1,388 @@
+import fs from "node:fs";
+import path from "node:path";
+import Fastify from "fastify";
+import {
+  resolvePaths,
+  loadIdentity,
+  type AgentPaths,
+  type AgentIdentity,
+} from "../harness-core/index.js";
+import { readMessages, appendMessage, writePendingMessage } from "../shared/mailbox-io.js";
+
+function parseArgs(argv: string[]): { agentDir: string; port: number; host: string } {
+  let agentDir = "";
+  let port = 8080;
+  let host = "127.0.0.1";
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--agent-dir" && argv[i + 1]) agentDir = argv[++i];
+    else if (argv[i] === "--port" && argv[i + 1]) port = Number(argv[++i]);
+    else if (argv[i] === "--host" && argv[i + 1]) host = argv[++i];
+  }
+  if (!agentDir) throw new Error("web-ui: missing --agent-dir");
+  return { agentDir, port, host };
+}
+
+function readText(file: string): string {
+  try {
+    return fs.readFileSync(file, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function pidStatus(file: string): { state: string; pid: string } {
+  const raw = readText(file);
+  if (!raw) return { state: "stopped", pid: "" };
+  const pid = Number(raw);
+  if (!Number.isFinite(pid)) return { state: "stale", pid: raw };
+  return { state: isRunning(pid) ? "running" : "stale", pid: String(pid) };
+}
+
+function formatTs(value: string): string {
+  const text = (value ?? "").trim();
+  if (!text) return "none";
+  const d = new Date(text);
+  if (Number.isNaN(d.getTime())) return text.replace("T", " ").replace("Z", "").trim();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function buildStatus(paths: AgentPaths, identity: AgentIdentity): Record<string, unknown> {
+  const heartbeat = readText(paths.heartbeatFile);
+  const awaitingDir = paths.awaitingDir;
+  let awaiting = false;
+  try {
+    awaiting = fs.statSync(awaitingDir).isDirectory() && fs.readdirSync(awaitingDir).length > 0;
+  } catch {
+    awaiting = false;
+  }
+  return {
+    agent: identity.agent_name,
+    interaction_mode: identity.interaction.mode,
+    provider: identity.provider,
+    runtime_state: readText(paths.stateFile) || "unknown",
+    runner: pidStatus(path.join(paths.pidsDir, "runtime")),
+    supervisor: pidStatus(path.join(paths.pidsDir, "supervisor")),
+    bridge: pidStatus(path.join(paths.pidsDir, "bridge")),
+    web_ui: pidStatus(path.join(paths.pidsDir, "web-ui")),
+    last_heartbeat: heartbeat ? formatTs(heartbeat) : "none",
+    awaiting_human: awaiting,
+  };
+}
+
+function buildHistory(paths: AgentPaths, limit: number): Array<Record<string, string>> {
+  const mb = path.join(paths.mailboxDir, "human.jsonl");
+  const messages = readMessages(mb);
+  return messages.slice(-limit).map((m) => ({
+    id: String(m.id ?? ""),
+    ts: formatTs(String(m.ts ?? "")),
+    from: String(m.from ?? ""),
+    to: String(m.to ?? ""),
+    task_id: String(m.task_id ?? ""),
+    message: String(m.message ?? ""),
+  }));
+}
+
+const HTML = (agentName: string): string => `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${agentName} MailBox</title>
+  <style>
+    :root {
+      --bg-0: #f4efe9; --bg-1: #e6f0ec;
+      --card: rgba(255, 255, 255, 0.86);
+      --ink: #1f2831; --muted: #5f6b78;
+      --line: rgba(31, 40, 49, 0.14);
+      --accent: #2f7a5f;
+      --on-bg: #d5f2e5; --on-fg: #186246;
+      --off-bg: #eceef0; --off-fg: #6c7782;
+      --human-bg: #dff3e7; --agent-bg: #f4f4f1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; color: var(--ink);
+      font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 12% 10%, rgba(47, 122, 95, 0.16), transparent 45%),
+        radial-gradient(circle at 85% 90%, rgba(185, 122, 91, 0.16), transparent 48%),
+        linear-gradient(140deg, var(--bg-0), var(--bg-1));
+    }
+    .app { width: min(980px, 100%); margin: 0 auto; padding: 28px 16px 40px; }
+    .top { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+    .top-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    h1 { margin: 2px 0 0; font-size: clamp(1.6rem, 3vw, 2rem); }
+    .kicker { margin: 0; text-transform: uppercase; letter-spacing: 0.09em; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .panel { border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin: 12px 0;
+      background: var(--card); backdrop-filter: blur(6px); box-shadow: 0 10px 30px rgba(25, 38, 32, 0.07); }
+    .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    h2, h3 { margin: 0; font-size: 1.02rem; }
+    .meta { color: var(--muted); font-size: 12px; }
+    .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); user-select: none; }
+    .toggle input { accent-color: var(--accent); }
+    .status-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+    .status-card { border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: grid; gap: 8px; background: #fff; }
+    .status-title { font-size: 13px; color: var(--muted); }
+    .status-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .badge { border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 700; letter-spacing: 0.03em; }
+    .badge.on { background: var(--on-bg); color: var(--on-fg); }
+    .badge.off { background: var(--off-bg); color: var(--off-fg); }
+    .status-meta { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+    .fact { border: 1px dashed var(--line); border-radius: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.58);
+      display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+    .pills { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pill { border-radius: 999px; padding: 6px 11px; font-size: 12px; font-weight: 700; }
+    .pill.on { background: var(--on-bg); color: var(--on-fg); }
+    .pill.off { background: var(--off-bg); color: var(--off-fg); }
+    .history { max-height: 48vh; overflow: auto; display: grid; gap: 10px; padding-right: 4px; }
+    .msg { display: grid; gap: 4px; }
+    .msg.human { justify-items: end; }
+    .msg.agent { justify-items: start; }
+    .msg-meta { color: var(--muted); font-size: 12px; }
+    .bubble { max-width: min(780px, 100%); border-radius: 14px; border: 1px solid var(--line); padding: 10px 12px;
+      white-space: pre-wrap; word-break: break-word; line-height: 1.45; box-shadow: 0 5px 16px rgba(31, 40, 49, 0.06); }
+    .bubble.human { background: var(--human-bg); }
+    .bubble.agent { background: var(--agent-bg); }
+    .row { margin-top: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    textarea { width: 100%; min-height: 112px; border-radius: 12px; border: 1px solid var(--line);
+      padding: 12px; font: inherit; color: inherit; background: rgba(255, 255, 255, 0.86); resize: vertical; }
+    button { border: none; border-radius: 10px; padding: 9px 14px; font: inherit; font-size: 14px; font-weight: 700;
+      color: #fff; background: var(--accent); cursor: pointer; }
+    button:hover { filter: brightness(0.95); }
+    button:disabled { opacity: 0.7; cursor: not-allowed; }
+    @media (max-width: 760px) {
+      .status-grid { grid-template-columns: 1fr; }
+      .facts { grid-template-columns: 1fr; }
+      .top { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="top">
+      <div>
+        <p class="kicker">MailBox</p>
+        <h1>${agentName} MailBox</h1>
+      </div>
+      <div class="top-actions">
+        <label class="toggle">
+          <input id="autoSync" type="checkbox" checked onchange="toggleAutoSync()" />
+          Auto Sync
+        </label>
+        <span id="syncMeta" class="meta">Syncing...</span>
+        <button onclick="refreshAll(true)">Refresh</button>
+      </div>
+    </header>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Status</h2><span id="heartbeatMeta" class="meta"></span></div>
+      <div class="status-grid">
+        <div class="status-card"><div class="status-title">Runner</div>
+          <div class="status-row"><span id="runnerBadge" class="badge off">OFF</span><span id="runnerMeta" class="status-meta">none</span></div></div>
+        <div class="status-card"><div class="status-title">Bridge</div>
+          <div class="status-row"><span id="bridgeBadge" class="badge off">OFF</span><span id="bridgeMeta" class="status-meta">none</span></div></div>
+        <div class="status-card"><div class="status-title">MailBox UI</div>
+          <div class="status-row"><span id="uiBadge" class="badge off">OFF</span><span id="uiMeta" class="status-meta">none</span></div></div>
+      </div>
+      <div class="facts">
+        <div class="fact"><span>Agent</span><strong id="agentName">-</strong></div>
+        <div class="fact"><span>Interaction Mode</span><strong id="interactionMode">-</strong></div>
+        <div class="fact"><span>Provider</span><strong id="provider">-</strong></div>
+        <div class="fact"><span>Runtime State</span><strong id="runtimeState">-</strong></div>
+      </div>
+      <div id="statusPills" class="pills"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Mailbox History</h2><span class="meta">Latest 50 messages</span></div>
+      <div id="history" class="history"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Send Human Message</h2>
+      <textarea id="message" placeholder="Type message"></textarea>
+      <div class="row"><button onclick="sendMessage()">Send</button><span id="sendResult" class="meta"></span></div>
+    </section>
+  </main>
+<script>
+let autoSyncTimer = null, statusBusy = false, historyBusy = false;
+let lastStatusFingerprint = '', lastHistoryFingerprint = '';
+function nowText() { return new Date().toLocaleTimeString(); }
+function setSyncMeta(t) { document.getElementById('syncMeta').textContent = t; }
+function shouldStickToBottom(root) { return (root.scrollHeight - root.scrollTop - root.clientHeight) < 80; }
+function setBadge(id, on) { const n = document.getElementById(id); n.textContent = on ? 'OPEN' : 'OFF'; n.className = 'badge ' + (on ? 'on' : 'off'); }
+function setProcess(prefix, p) {
+  const on = p && p.state === 'running';
+  setBadge(prefix + 'Badge', on);
+  const state = p && p.state ? p.state : 'unknown';
+  const pid = p && p.pid ? 'PID ' + p.pid : 'PID none';
+  document.getElementById(prefix + 'Meta').textContent = pid + ' \u00b7 ' + state;
+}
+function renderPills(d) {
+  const items = [
+    {label: 'Awaiting Human', on: Boolean(d.awaiting_human)},
+    {label: 'Runner Online', on: d.runner && d.runner.state === 'running'},
+    {label: 'Bridge Online', on: d.bridge && d.bridge.state === 'running'},
+    {label: 'UI Online', on: d.web_ui && d.web_ui.state === 'running'},
+  ];
+  const root = document.getElementById('statusPills');
+  root.innerHTML = '';
+  for (const it of items) {
+    const n = document.createElement('span');
+    n.className = 'pill ' + (it.on ? 'on' : 'off');
+    n.textContent = it.label + ': ' + (it.on ? 'ON' : 'OFF');
+    root.appendChild(n);
+  }
+}
+function statusFingerprint(d) {
+  return [d.agent||'', d.interaction_mode||'', d.provider||'', d.runtime_state||'', d.last_heartbeat||'',
+    d.awaiting_human?'1':'0',
+    d.runner?(d.runner.state||'')+':'+(d.runner.pid||''):'',
+    d.bridge?(d.bridge.state||'')+':'+(d.bridge.pid||''):'',
+    d.web_ui?(d.web_ui.state||'')+':'+(d.web_ui.pid||''):''].join('|');
+}
+async function loadStatus(force = false) {
+  if (statusBusy) return;
+  statusBusy = true;
+  try {
+    const resp = await fetch('/api/status');
+    const d = await resp.json();
+    const fp = statusFingerprint(d);
+    if (!force && fp === lastStatusFingerprint) return;
+    lastStatusFingerprint = fp;
+    setProcess('runner', d.runner);
+    setProcess('bridge', d.bridge);
+    setProcess('ui', d.web_ui);
+    document.getElementById('agentName').textContent = d.agent || '-';
+    document.getElementById('interactionMode').textContent = d.interaction_mode || '-';
+    document.getElementById('provider').textContent = d.provider || '-';
+    document.getElementById('runtimeState').textContent = d.runtime_state || '-';
+    document.getElementById('heartbeatMeta').textContent = 'Last heartbeat: ' + (d.last_heartbeat || 'none');
+    renderPills(d);
+  } finally { statusBusy = false; }
+}
+function renderMessage(item) {
+  const wrap = document.createElement('div');
+  const isHuman = item.from === 'human';
+  wrap.className = 'msg ' + (isHuman ? 'human' : 'agent');
+  const meta = document.createElement('div');
+  meta.className = 'msg-meta';
+  meta.textContent = item.ts + ' \u00b7 ' + item.from + ' \u00b7 ' + item.task_id;
+  wrap.appendChild(meta);
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble ' + (isHuman ? 'human' : 'agent');
+  bubble.textContent = item.message;
+  wrap.appendChild(bubble);
+  return wrap;
+}
+async function loadHistory() {
+  if (historyBusy) return;
+  historyBusy = true;
+  try {
+    const resp = await fetch('/api/history?limit=50');
+    const d = await resp.json();
+    const items = d.items || [];
+    const last = items.length ? items[items.length - 1] : null;
+    const fp = items.length + ':' + (last ? last.id : '') + ':' + (last ? last.ts : '');
+    if (fp === lastHistoryFingerprint) return;
+    lastHistoryFingerprint = fp;
+    const root = document.getElementById('history');
+    const keepBottom = shouldStickToBottom(root);
+    root.innerHTML = '';
+    for (const it of items) root.appendChild(renderMessage(it));
+    if (keepBottom) root.scrollTop = root.scrollHeight;
+  } finally { historyBusy = false; }
+}
+async function sendMessage() {
+  const input = document.getElementById('message');
+  const text = input.value.trim();
+  const result = document.getElementById('sendResult');
+  result.textContent = '';
+  if (!text) { result.textContent = 'Message is empty'; return; }
+  const resp = await fetch('/api/send', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({message: text}),
+  });
+  const d = await resp.json();
+  if (!resp.ok) { result.textContent = 'Error: ' + (d.error || 'send failed'); return; }
+  input.value = '';
+  result.textContent = 'Sent as ' + d.id;
+  await refreshAll(true);
+}
+async function refreshAll(force = false) {
+  try { await Promise.all([loadStatus(force), loadHistory()]); setSyncMeta('Last sync ' + nowText()); }
+  catch { setSyncMeta('Sync failed'); }
+}
+function toggleAutoSync() {
+  const enabled = document.getElementById('autoSync').checked;
+  if (!enabled) {
+    if (autoSyncTimer) { clearInterval(autoSyncTimer); autoSyncTimer = null; }
+    setSyncMeta('Auto sync off'); return;
+  }
+  if (autoSyncTimer) clearInterval(autoSyncTimer);
+  const interval = document.hidden ? 5000 : 2000;
+  autoSyncTimer = setInterval(() => { if (!document.getElementById('autoSync').checked) return; refreshAll(false); }, interval);
+  refreshAll(false);
+}
+document.addEventListener('visibilitychange', () => { if (document.getElementById('autoSync').checked) toggleAutoSync(); });
+refreshAll(true);
+toggleAutoSync();
+</script>
+</body>
+</html>`;
+
+async function main(): Promise<void> {
+  const { agentDir, port, host } = parseArgs(process.argv.slice(2));
+  const paths = resolvePaths(agentDir);
+  const identity = loadIdentity(paths);
+
+  const app = Fastify({ logger: false });
+
+  app.get("/", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8").send(HTML(identity.agent_name));
+  });
+  app.get("/api/status", async () => buildStatus(paths, identity));
+  app.get<{ Querystring: { limit?: string } }>("/api/history", async (req) => {
+    let limit = parseInt(req.query.limit ?? "50", 10);
+    if (!Number.isFinite(limit)) limit = 50;
+    limit = Math.max(1, Math.min(limit, 200));
+    return { items: buildHistory(paths, limit) };
+  });
+  app.post<{ Body: { message?: string } }>("/api/send", async (req, reply) => {
+    const message = String(req.body?.message ?? "").trim();
+    if (!message) return reply.code(400).send({ error: "message must not be empty" });
+    const mailbox = path.join(paths.mailboxDir, "human.jsonl");
+    const entry = appendMessage(mailbox, "human", identity.agent_name, "task.human.reply", message, {
+      source: "web-ui",
+    });
+    writePendingMessage(paths.runtimeDir, "human", entry.id, "web-ui");
+    return { ok: true, id: entry.id, ts: entry.ts };
+  });
+
+  const address = await app.listen({ host, port });
+  console.log(`[web-ui] ${identity.agent_name} serving at ${address}`);
+
+  const shutdown = async (sig: NodeJS.Signals) => {
+    console.log(`[web-ui] ${sig} received`);
+    await app.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+}
+
+main().catch((err) => {
+  console.error(`[web-ui] fatal: ${(err as Error).stack || err}`);
+  process.exit(1);
+});

@@ -1,0 +1,26 @@
+{
+  "name": "long-run-agent-harness-engine",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.114",
+    "@fastify/static": "^7.0.4",
+    "@larksuiteoapi/node-sdk": "^1.60.0",
+    "@openai/codex-sdk": "^0.121.0",
+    "fastify": "^4.28.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.5.4"
+  }
+}

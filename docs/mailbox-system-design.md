@@ -276,7 +276,7 @@ connect/disconnect 端点负责在双方 workdir 中完成文件创建/清理和
 
 ## Skills 脚本清单
 
-`shared/skills/mailbox-operate/scripts/` 下：
+`engine/skills/mailbox-operate/scripts/` 下：
 
 | 脚本 | 用途 |
 |------|------|
