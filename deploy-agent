@@ -193,29 +193,6 @@ def seed_mailbox(workdir: Path, agent_name: str, created_at: str, created_date: 
     human_mb.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")
 
 
-def seed_bootstrap_state(workdir: Path, created_at: str) -> None:
-    dst = workdir / "Runtime" / "bootstrap_state.json"
-    if dst.exists():
-        return
-    dst.write_text(
-        json.dumps(
-            {
-                "phase": "prd",
-                "prd_path": "Memory/knowledge/conceptual/conceptual--bootstrap--prd.md",
-                "architecture_path": "Memory/knowledge/conceptual/conceptual--bootstrap--architecture.md",
-                "assumptions_path": "Memory/knowledge/conceptual/conceptual--bootstrap--assumptions.md",
-                "created_at": created_at,
-                "phase_history": [
-                    {"phase": "prd", "entered_at": created_at, "note": "initial bootstrap"}
-                ],
-            },
-            indent=2,
-            ensure_ascii=False,
-        ) + "\n",
-        encoding="utf-8",
-    )
-
-
 def write_feishu_env(workdir: Path, feishu_app_id: str, feishu_app_secret: str,
                      feishu_chat_id: str, allowed_user_ids: str) -> None:
     (workdir / "mailbox_bridge.env").write_text(
@@ -271,7 +248,6 @@ def scaffold_workspace(workdir: Path, agent_name: str, goal: str, provider: str)
 
     link_default_skills(workdir, provider)
     render_subagents(workdir, provider, replacements)
-    seed_bootstrap_state(workdir, created_at)
 
     return created_at, created_date
 

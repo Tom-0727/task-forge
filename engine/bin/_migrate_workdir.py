@@ -49,7 +49,10 @@ LEGACY_RUNTIME_FILES = [
     "feishu_chat_id",
     "allowed_user_ids",
     "first_instruction",
+    "bootstrap_state.json",
 ]
+
+LEGACY_SKILL_LINKS = ["bootstrap-sdlc"]
 
 
 def utcnow_iso() -> str:
@@ -152,6 +155,13 @@ def plan_removals(workdir: Path) -> tuple[list[Path], list[Path]]:
         p = runtime / name
         if p.is_file() or p.is_symlink():
             files.append(p)
+    for skill_root in (workdir / ".claude" / "skills", workdir / ".agents" / "skills"):
+        if not skill_root.is_dir():
+            continue
+        for name in LEGACY_SKILL_LINKS:
+            p = skill_root / name
+            if p.is_symlink() or p.exists():
+                files.append(p)
     return files, dirs
 
 
@@ -185,6 +195,35 @@ def write_agent_json(workdir: Path, ident: dict, engine_version: str) -> Path:
     path = runtime / "agent.json"
     path.write_text(json.dumps(identity, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
+
+
+def render_rules_file(workdir: Path, engine_root: Path, ident: dict) -> Path | None:
+    provider = ident["provider"]
+    cfg = {
+        "claude": ("CLAUDE.md.tmpl", "CLAUDE.md"),
+        "codex": ("AGENTS.md.tmpl", "AGENTS.md"),
+    }[provider]
+    tmpl = engine_root / "templates" / cfg[0]
+    dst = workdir / cfg[1]
+    if not tmpl.exists():
+        return None
+    goal = ""
+    goal_file = workdir / "Runtime" / "goal"
+    if goal_file.exists():
+        goal = goal_file.read_text(encoding="utf-8").rstrip()
+    replacements = {
+        "AGENT_NAME": ident["agent_name"],
+        "GOAL": goal,
+        "EPISODE_PLANNER_NAME":
+            "episode-planner" if provider == "claude" else "episode_planner",
+        "EPISODE_EVALUATOR_NAME":
+            "episode-evaluator" if provider == "claude" else "episode_evaluator",
+    }
+    body = tmpl.read_text(encoding="utf-8")
+    for k, v in replacements.items():
+        body = body.replace("{{" + k + "}}", v)
+    dst.write_text(body, encoding="utf-8")
+    return dst
 
 
 def render_subagents(workdir: Path, engine_root: Path, ident: dict) -> list[Path]:
@@ -322,6 +361,10 @@ def main() -> int:
             print("[migrate] upgraded Runtime/agent.json runtime.default_compact_every_n_heartbeats")
     rendered = render_subagents(workdir, engine_root, ident)
     print(f"[migrate] rendered {len(rendered)} subagent files")
+
+    rules_dst = render_rules_file(workdir, engine_root, ident)
+    if rules_dst is not None:
+        print(f"[migrate] refreshed rules file {rules_dst.relative_to(workdir)}")
 
     unpacked = unpack_shared_skill_dirs(engine_root, workdir, ident["provider"])
     for p in unpacked:

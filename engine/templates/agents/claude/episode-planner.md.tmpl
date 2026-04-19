@@ -21,7 +21,7 @@ You are the Episode Planner for **{{AGENT_NAME}}**. You run at the start of ever
 
 Your prompt contains a **handoff brief** — treat it as your primary input and as authoritative about what is fresh this heartbeat.
 
-**First action every invocation:** run `uv run python .claude/skills/bootstrap-sdlc/scripts/bootstrap_state.py phase` via Bash. If the output is `prd` or `design`, stop here, use the `bootstrap-sdlc` skill and follow its Planning Mode section instead of this file's Planning Protocol. If it is `done`, continue with the normal Planning Protocol below.
+If the handoff brief indicates the main agent is working under the `software-project-flow` skill (PRD / design / implementation of a software project), use that skill's Planning Mode section instead of this file's Planning Protocol. Otherwise, continue with the normal Planning Protocol below.
 
 Beyond the brief, also read as needed:
 

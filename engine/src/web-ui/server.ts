@@ -4,6 +4,7 @@ import Fastify from "fastify";
 import {
   resolvePaths,
   loadIdentity,
+  readMetrics,
   type AgentPaths,
   type AgentIdentity,
 } from "../harness-core/index.js";
@@ -145,6 +146,15 @@ const HTML = (agentName: string): string => `<!doctype html>
     .pill { border-radius: 999px; padding: 6px 11px; font-size: 12px; font-weight: 700; }
     .pill.on { background: var(--on-bg); color: var(--on-fg); }
     .pill.off { background: var(--off-bg); color: var(--off-fg); }
+    .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .metric-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: #fff;
+      display: grid; gap: 6px; }
+    .metric-title { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
+    .metric-row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+    .metric-row span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .bar { height: 8px; border-radius: 6px; background: var(--off-bg); overflow: hidden; }
+    .bar > div { height: 100%; background: var(--accent); transition: width 0.4s ease; }
+    @media (max-width: 760px) { .metric-grid { grid-template-columns: 1fr; } }
     .history { max-height: 48vh; overflow: auto; display: grid; gap: 10px; padding-right: 4px; }
     .msg { display: grid; gap: 4px; }
     .msg.human { justify-items: end; }
@@ -205,6 +215,35 @@ const HTML = (agentName: string): string => `<!doctype html>
     </section>
 
     <section class="panel">
+      <div class="panel-head"><h2>Observability</h2><span id="metricsMeta" class="meta">—</span></div>
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="metric-title">Heartbeats</div>
+          <div class="metric-row"><span>Count</span><span id="hbCount">—</span></div>
+          <div class="metric-row"><span>Last</span><span id="hbLast">—</span></div>
+          <div class="metric-row"><span>Avg</span><span id="hbAvg">—</span></div>
+          <div class="metric-row"><span>Total</span><span id="hbTotal">—</span></div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-title">Compact</div>
+          <div class="metric-row"><span id="compactProgressText">—</span><span id="compactProgressNum">—</span></div>
+          <div class="bar"><div id="compactBar" style="width:0%"></div></div>
+          <div class="metric-row"><span>Total</span><span id="compactTotal">—</span></div>
+          <div class="metric-row"><span>Avg gap</span><span id="compactAvgGap">—</span></div>
+          <div class="metric-row"><span>Last at</span><span id="compactLastAt">—</span></div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-title">Tokens (last turn)</div>
+          <div class="metric-row"><span>Context est.</span><span id="tokCtx">—</span></div>
+          <div class="metric-row"><span>Input</span><span id="tokIn">—</span></div>
+          <div class="metric-row"><span>Output</span><span id="tokOut">—</span></div>
+          <div class="metric-row"><span>Cache read</span><span id="tokCacheRead">—</span></div>
+          <div class="metric-row"><span>Cache create</span><span id="tokCacheCreate">—</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
       <div class="panel-head"><h2>Mailbox History</h2><span class="meta">Latest 50 messages</span></div>
       <div id="history" class="history"></div>
     </section>
@@ -216,8 +255,8 @@ const HTML = (agentName: string): string => `<!doctype html>
     </section>
   </main>
 <script>
-let autoSyncTimer = null, statusBusy = false, historyBusy = false;
-let lastStatusFingerprint = '', lastHistoryFingerprint = '';
+let autoSyncTimer = null, statusBusy = false, historyBusy = false, metricsBusy = false;
+let lastStatusFingerprint = '', lastHistoryFingerprint = '', lastMetricsFingerprint = '';
 function nowText() { return new Date().toLocaleTimeString(); }
 function setSyncMeta(t) { document.getElementById('syncMeta').textContent = t; }
 function shouldStickToBottom(root) { return (root.scrollHeight - root.scrollTop - root.clientHeight) < 80; }
@@ -320,8 +359,41 @@ async function sendMessage() {
   result.textContent = 'Sent as ' + d.id;
   await refreshAll(true);
 }
+function fmtNum(n) { if (typeof n !== 'number' || !isFinite(n)) return '—'; return n.toLocaleString(); }
+function fmtSec(s) { if (typeof s !== 'number' || !isFinite(s)) return '—'; if (s < 60) return s.toFixed(1) + 's'; const m = Math.floor(s / 60), r = s - m * 60; return m + 'm ' + r.toFixed(0) + 's'; }
+function fmtTs(s) { if (!s) return 'never'; const d = new Date(s); if (isNaN(d.getTime())) return s; const p = (n) => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
+async function loadMetrics() {
+  if (metricsBusy) return;
+  metricsBusy = true;
+  try {
+    const resp = await fetch('/api/metrics');
+    const m = await resp.json();
+    const fp = JSON.stringify([m.heartbeat, m.compact, m.tokens && m.tokens.estimated_context_tokens, m.tokens && m.tokens.last_turn, m.last_updated]);
+    if (fp === lastMetricsFingerprint) return;
+    lastMetricsFingerprint = fp;
+    const hb = m.heartbeat || {}, c = m.compact || {}, t = (m.tokens && m.tokens.last_turn) || {};
+    document.getElementById('hbCount').textContent = fmtNum(hb.count);
+    document.getElementById('hbLast').textContent = fmtSec(hb.last_duration_seconds);
+    document.getElementById('hbAvg').textContent = fmtSec(hb.avg_duration_seconds);
+    document.getElementById('hbTotal').textContent = fmtSec(hb.total_duration_seconds);
+    const thr = c.threshold || 0, cur = c.count_since_last || 0;
+    const pct = thr > 0 ? Math.min(100, Math.round(cur * 100 / thr)) : 0;
+    document.getElementById('compactProgressText').textContent = thr > 0 ? 'Progress' : 'Disabled';
+    document.getElementById('compactProgressNum').textContent = thr > 0 ? (cur + ' / ' + thr) : '—';
+    document.getElementById('compactBar').style.width = pct + '%';
+    document.getElementById('compactTotal').textContent = fmtNum(c.total_compacts);
+    document.getElementById('compactAvgGap').textContent = c.total_compacts ? (c.avg_heartbeats_between || 0).toFixed(2) + ' hb' : '—';
+    document.getElementById('compactLastAt').textContent = fmtTs(c.last_compact_at);
+    document.getElementById('tokCtx').textContent = fmtNum((m.tokens && m.tokens.estimated_context_tokens) || 0);
+    document.getElementById('tokIn').textContent = fmtNum(t.input_tokens);
+    document.getElementById('tokOut').textContent = fmtNum(t.output_tokens);
+    document.getElementById('tokCacheRead').textContent = fmtNum(t.cache_read_input_tokens);
+    document.getElementById('tokCacheCreate').textContent = t.cache_creation_input_tokens != null ? fmtNum(t.cache_creation_input_tokens) : (t.cached_input_tokens != null ? ('cached ' + fmtNum(t.cached_input_tokens)) : '—');
+    document.getElementById('metricsMeta').textContent = 'Updated ' + fmtTs(m.last_updated);
+  } finally { metricsBusy = false; }
+}
 async function refreshAll(force = false) {
-  try { await Promise.all([loadStatus(force), loadHistory()]); setSyncMeta('Last sync ' + nowText()); }
+  try { await Promise.all([loadStatus(force), loadHistory(), loadMetrics()]); setSyncMeta('Last sync ' + nowText()); }
   catch { setSyncMeta('Sync failed'); }
 }
 function toggleAutoSync() {
@@ -353,6 +425,7 @@ async function main(): Promise<void> {
     reply.type("text/html; charset=utf-8").send(HTML(identity.agent_name));
   });
   app.get("/api/status", async () => buildStatus(paths, identity));
+  app.get("/api/metrics", async () => readMetrics(paths));
   app.get<{ Querystring: { limit?: string } }>("/api/history", async (req) => {
     let limit = parseInt(req.query.limit ?? "50", 10);
     if (!Number.isFinite(limit)) limit = 50;

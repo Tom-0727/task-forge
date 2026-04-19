@@ -1,5 +1,4 @@
 import type { AgentIdentity, AgentPaths } from "./types.js";
-import { readBootstrapPhase, buildBootstrapNotice } from "./bootstrap.js";
 import { renderDueRemindersSection, renderTodayTodosSection } from "./todo.js";
 
 export interface BuildPromptOpts {
@@ -12,7 +11,6 @@ export function buildPrompt(
   identity: AgentIdentity,
   opts: BuildPromptOpts
 ): string {
-  const bootstrap = buildBootstrapNotice(readBootstrapPhase(paths));
   const due = renderDueRemindersSection(paths);
   const todos = renderTodayTodosSection(paths);
   const rulesFile = identity.provider === "claude" ? "CLAUDE.md" : "AGENTS.md";
@@ -24,7 +22,7 @@ export function buildPrompt(
       ? firstHeartbeatBody(identity.agent_name, rulesFile, skillsDirHint)
       : normalHeartbeatBody(identity.agent_name, rulesFile);
 
-  const segments = [bootstrap, due, todos, body.trim(), `Working directory: ${paths.agentDir}`];
+  const segments = [due, todos, body.trim(), `Working directory: ${paths.agentDir}`];
   return segments.filter((s) => s && s.length > 0).join("\n\n");
 }
 
@@ -45,7 +43,7 @@ function firstHeartbeatBody(agentName: string, rulesFile: string, skillsDir: str
   return [
     `You are ${agentName}. This is your first heartbeat.`,
     "",
-    `Read ${rulesFile} to understand your behavioral rules, including the Bootstrap Protocol that gates your first phases of work.`,
+    `Read ${rulesFile} to understand your behavioral rules.`,
     `Read your mailbox: uv run python ${skillsDir}/mailbox-operate/scripts/read_mailbox.py`,
     "If you need to pause for a reply, use send_mailbox.py with --await-reply.",
     "Then begin working on your assigned task.",

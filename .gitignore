@@ -8,6 +8,7 @@ platform/.usage_cache.json
 # Editors / IDE
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~

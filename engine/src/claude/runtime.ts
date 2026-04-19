@@ -12,14 +12,17 @@ import {
   writeInterval,
   readInterval,
   readCompactInterval,
-  bumpCompactCount,
-  resetCompactCount,
   decidePreInvoke,
   clearUnchangedPending,
   hasAnyPending,
   sleepWithWakeup,
+  appendEvent,
+  recordHeartbeat,
+  recordCompactSuccess,
+  updateCompactThreshold,
   type AgentIdentity,
   type AgentPaths,
+  type TurnTokens,
 } from "../harness-core/index.js";
 import { query, type Options as ClaudeAgentOptions, type AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 
@@ -117,7 +120,7 @@ async function invokeAgent(
   identity: AgentIdentity,
   prompt: string,
   log: ReturnType<typeof createLogger>
-): Promise<void> {
+): Promise<TurnTokens> {
   const sessionId = loadSessionId(paths);
 
   const claudeBin = resolveClaudeExecutable();
@@ -136,6 +139,7 @@ async function invokeAgent(
   log.info(sessionId ? `resuming session ${sessionId}` : "starting new session");
 
   let newSessionId: string | null = null;
+  let tokens: TurnTokens = {};
 
   for await (const message of query({ prompt, options })) {
     const kind = (message as { type?: string }).type;
@@ -143,11 +147,24 @@ async function invokeAgent(
     if (kind === "assistant") {
       const content = (message as { message?: { content?: unknown[] } }).message?.content ?? [];
       for (const block of content) {
-        const b = block as { type?: string; text?: string; name?: string };
+        const b = block as { type?: string; text?: string; name?: string; id?: string; input?: unknown };
         if (b.type === "text" && typeof b.text === "string") {
           log.info(`agent: ${b.text.slice(0, 200)}`);
+          appendEvent(paths, "agent_text", { text: b.text });
         } else if (b.type === "tool_use" && typeof b.name === "string") {
           log.info(`tool: ${b.name}`);
+          appendEvent(paths, "tool_use", { name: b.name, id: b.id, input: b.input });
+        }
+      }
+    } else if (kind === "user") {
+      const content = (message as { message?: { content?: unknown[] } }).message?.content ?? [];
+      for (const block of content) {
+        const b = block as { type?: string; tool_use_id?: string; content?: unknown; is_error?: boolean };
+        if (b.type === "tool_result") {
+          appendEvent(paths, "tool_result", {
+            tool_use_id: b.tool_use_id,
+            is_error: b.is_error ?? false,
+          });
         }
       }
     } else if (kind === "result") {
@@ -156,10 +173,29 @@ async function invokeAgent(
         subtype?: string;
         num_turns?: number;
         total_cost_usd?: number;
+        usage?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        };
       };
       if (r.session_id) newSessionId = r.session_id;
+      const u = r.usage ?? {};
+      const inputT = u.input_tokens ?? 0;
+      const cacheRead = u.cache_read_input_tokens ?? 0;
+      const cacheCreate = u.cache_creation_input_tokens ?? 0;
+      tokens = {
+        input_tokens: inputT,
+        output_tokens: u.output_tokens ?? 0,
+        cache_read_input_tokens: cacheRead,
+        cache_creation_input_tokens: cacheCreate,
+        estimated_context_tokens: inputT + cacheRead + cacheCreate,
+      };
       if (r.subtype === "success") {
-        log.info(`heartbeat ok. turns=${r.num_turns ?? 0} cost=${(r.total_cost_usd ?? 0).toFixed(4)}`);
+        log.info(
+          `heartbeat ok. turns=${r.num_turns ?? 0} cost=${(r.total_cost_usd ?? 0).toFixed(4)} ctx=${tokens.estimated_context_tokens}`
+        );
       } else {
         log.warn(`heartbeat ended: ${r.subtype}`);
       }
@@ -167,6 +203,7 @@ async function invokeAgent(
   }
 
   if (newSessionId) saveSessionId(paths, newSessionId);
+  return tokens;
 }
 
 async function invokeCompact(
@@ -260,33 +297,63 @@ async function main(): Promise<void> {
         continue;
       }
 
+      const threshold = readCompactInterval(
+        paths,
+        identity.runtime.default_compact_every_n_heartbeats
+      );
+      updateCompactThreshold(paths, threshold);
+
+      appendEvent(paths, "heartbeat_start", {});
+      const startedAt = Date.now();
       let invokeOk = true;
+      let tokens: TurnTokens = {};
       try {
-        await invokeAgent(paths, identity, decision.prompt!, log);
+        tokens = await invokeAgent(paths, identity, decision.prompt!, log);
       } catch (err) {
         invokeOk = false;
-        log.error(`invoke error: ${(err as Error).message}`);
+        const msg = (err as Error).message;
+        log.error(`invoke error: ${msg}`);
+        appendEvent(paths, "error", { phase: "invoke", message: msg });
       } finally {
         clearUnchangedPending(paths, decision.pendingSnapshot ?? {});
       }
+      const durationSeconds = (Date.now() - startedAt) / 1000;
+      const m = invokeOk
+        ? recordHeartbeat(paths, { durationSeconds, tokens, compactThreshold: threshold })
+        : null;
+      appendEvent(paths, "heartbeat_end", {
+        duration_seconds: durationSeconds,
+        ok: invokeOk,
+        heartbeat_count: m ? m.heartbeat.count : undefined,
+        compact_count_since_last: m ? m.compact.count_since_last : undefined,
+        estimated_context_tokens: m ? m.tokens.estimated_context_tokens : undefined,
+      });
       firstHeartbeat = false;
 
-      if (invokeOk) {
-        const threshold = readCompactInterval(
-          paths,
-          identity.runtime.default_compact_every_n_heartbeats
+      if (invokeOk && m && threshold > 0 && m.compact.count_since_last >= threshold) {
+        log.info(
+          `compact threshold reached (${m.compact.count_since_last}/${threshold}); compacting`
         );
-        if (threshold > 0) {
-          const count = bumpCompactCount(paths);
-          if (count >= threshold) {
-            log.info(`compact threshold reached (${count}/${threshold}); compacting`);
-            try {
-              const ok = await invokeCompact(paths, log);
-              if (ok) resetCompactCount(paths);
-            } catch (err) {
-              log.error(`compact error: ${(err as Error).message}`);
-            }
+        appendEvent(paths, "compact_start", {
+          count_since_last: m.compact.count_since_last,
+          threshold,
+        });
+        try {
+          const ok = await invokeCompact(paths, log);
+          if (ok) {
+            const post = recordCompactSuccess(paths);
+            appendEvent(paths, "compact_end", {
+              ok: true,
+              total_compacts: post.compact.total_compacts,
+              avg_heartbeats_between: post.compact.avg_heartbeats_between,
+            });
+          } else {
+            appendEvent(paths, "compact_end", { ok: false });
           }
+        } catch (err) {
+          const msg = (err as Error).message;
+          log.error(`compact error: ${msg}`);
+          appendEvent(paths, "error", { phase: "compact", message: msg });
         }
       }
 

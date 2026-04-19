@@ -1,4 +1,4 @@
 {
-  "claude": ["mailbox-operate", "todo", "bootstrap-sdlc"],
-  "codex": ["mailbox-operate", "todo", "bootstrap-sdlc"]
+  "claude": ["mailbox-operate", "todo", "software-project-flow", "fork-basic-agent"],
+  "codex": ["mailbox-operate", "todo", "software-project-flow", "fork-basic-agent"]
 }

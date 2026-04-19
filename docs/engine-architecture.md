@@ -29,7 +29,6 @@ repo-root/
         pid.ts
         mailbox.ts
         schedule.ts
-        bootstrap.ts
         todo.ts
         prompt.ts
         decide.ts
@@ -61,9 +60,8 @@ repo-root/
       todo/
         SKILL.md
         scripts/*.py
-      bootstrap-sdlc/
+      software-project-flow/
         SKILL.md
-        scripts/*.py
       default.json            { "claude": [...], "codex": [...] }
     templates/
       CLAUDE.md.tmpl
@@ -110,7 +108,6 @@ Deleted in M6: `providers/`, `shared/`, `update-runtime`, all `.tmpl` outside `e
     claude_session_id | codex_thread_id
     passive_mode              presence = enabled
     work_schedule.json
-    bootstrap_state.json
     pending_messages/*.json
     awaiting_reply/<contact>  presence = awaiting
     due_reminders.json
@@ -126,10 +123,10 @@ Deleted in M6: `providers/`, `shared/`, `update-runtime`, all `.tmpl` outside `e
       web-ui.log
       supervisor.log
   .claude/skills/ | .agents/skills/
-    mailbox-operate -> <engine>/skills/mailbox-operate   symlink
-    todo -> <engine>/skills/todo                         symlink
-    bootstrap-sdlc -> <engine>/skills/bootstrap-sdlc     symlink
-    <private-skill>/                                      real directory
+    mailbox-operate -> <engine>/skills/mailbox-operate                 symlink
+    todo -> <engine>/skills/todo                                       symlink
+    software-project-flow -> <engine>/skills/software-project-flow     symlink
+    <private-skill>/                                                    real directory
 ```
 
 Forbidden in workdir after M6: `run_*.py`, `run_*.mjs`, `mailbox_io.*`, `web_ui_server.*`, `mailbox_feishu_bridge.*`, `.venv/`, `node_modules/`, `package.json`, `requirements.txt`, `Runtime/runtime_provider`, `Runtime/agent_name`, `Runtime/interaction_mode`, `Runtime/goal`.
@@ -178,7 +175,7 @@ export interface AgentPaths {
   intervalFile: string; passiveModeFile: string;
   sessionIdFile: string; threadIdFile: string;
   pendingDir: string; awaitingDir: string;
-  workScheduleFile: string; bootstrapStateFile: string;
+  workScheduleFile: string;
   dueRemindersFile: string; codexEventsFile: string;
   pidsDir: string; logsDir: string;
   mailboxDir: string; memoryDir: string;
@@ -187,8 +184,6 @@ export interface AgentPaths {
 }
 export interface WorkSchedule { timezone: string; windows: Array<{ days: number[]; start: string; end: string; }>; }
 export interface PendingMessage { mailbox_id: string; [k: string]: unknown; }
-export type BootstrapPhase = "prd" | "design" | "done";
-export interface BootstrapState { phase: BootstrapPhase; [k: string]: unknown; }
 export interface TodoItem { id: string; title: string; description?: string; done?: boolean; subtasks?: Array<{text: string; done?: boolean}>; }
 export interface ScheduledTask { id: string; title: string; description?: string; subtasks?: Array<{text: string}>; }
 export type HeartbeatAction = "invoke" | "skip_short_sleep" | "skip_long_sleep";
@@ -261,20 +256,6 @@ export function secondsUntilNextWindow(s: WorkSchedule, now?: Date): number;
 
 Minimum return from `secondsUntilNextWindow` is 60.
 
-### bootstrap.ts
-
-```ts
-export function readBootstrapPhase(p: AgentPaths): BootstrapPhase;
-export function buildBootstrapNotice(phase: BootstrapPhase): string;
-```
-
-Notice text when phase is not `done`:
-
-```
-BOOTSTRAP ACTIVE — phase: <phase>
-You are NOT allowed to do business implementation work this heartbeat. Before any other action, use the `bootstrap-sdlc` skill and obey its Protocol section in full. Only the files permitted there may be written this heartbeat.
-```
-
 ### todo.ts
 
 ```ts
@@ -297,11 +278,10 @@ export function buildPrompt(
 
 Composition order (join with `\n\n`, drop empty segments):
 
-1. bootstrap notice
-2. due reminders section
-3. today's todos section
-4. body (mailbox-prompt | first-heartbeat-prompt | heartbeat-prompt)
-5. `Working directory: <agentDir>`
+1. due reminders section
+2. today's todos section
+3. body (mailbox-prompt | first-heartbeat-prompt | heartbeat-prompt)
+4. `Working directory: <agentDir>`
 
 Body templates live in prompt.ts as string constants. Placeholders are agent name, provider-specific skill invocation lines.
 
@@ -489,8 +469,8 @@ status.sh:
 
 ```json
 {
-  "claude": ["mailbox-operate", "todo", "bootstrap-sdlc"],
-  "codex":  ["mailbox-operate", "todo", "bootstrap-sdlc"]
+  "claude": ["mailbox-operate", "todo", "software-project-flow"],
+  "codex":  ["mailbox-operate", "todo", "software-project-flow"]
 }
 ```
 

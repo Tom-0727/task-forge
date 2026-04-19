@@ -1,6 +1,5 @@
 export type Provider = "claude" | "codex";
 export type InteractionMode = "web-ui" | "feishu" | "none";
-export type BootstrapPhase = "prd" | "design" | "done";
 export type HeartbeatAction = "invoke" | "skip_short_sleep" | "skip_long_sleep";
 export type RuntimeState =
   | "running"
@@ -47,15 +46,14 @@ export interface AgentPaths {
   heartbeatFile: string;
   intervalFile: string;
   compactIntervalFile: string;
-  compactCounterFile: string;
   passiveModeFile: string;
   claudeSessionFile: string;
   codexThreadFile: string;
-  codexEventsFile: string;
+  metricsFile: string;
+  eventsFile: string;
   pendingDir: string;
   awaitingDir: string;
   workScheduleFile: string;
-  bootstrapStateFile: string;
   dueRemindersFile: string;
   pidsDir: string;
   logsDir: string;
@@ -77,11 +75,6 @@ export interface PendingMessage {
   mailbox_id: string;
   ts?: string;
   source?: string;
-  [k: string]: unknown;
-}
-
-export interface BootstrapState {
-  phase: BootstrapPhase;
   [k: string]: unknown;
 }
 

@@ -14,8 +14,6 @@ Your responsibility is to continuously make progress toward the goals assigned t
 
 You persist knowledge, record episodes, make skills and communicate with humans through the structures in this workspace. You should grow more capable over time.
 
-**Until a PRD and an architecture design (with verified core assumptions) have been drafted and approved by the human, your per-heartbeat scope is narrowed to bootstrap work only — no business implementation.** See the Bootstrap Gate section below.
-
 ## Skills directory convention
 
 Skill docs reference paths like `{skills-dir}/<skill>/scripts/<file>.py`. For this agent (Claude), resolve `{skills-dir}` to `.claude/skills`. Example:
@@ -46,7 +44,6 @@ Shared skills under `.claude/skills/` are symlinks into the central engine — d
     episodes/               # Bounded execution records
   Runtime/
     agent.json              # Identity + runtime config (do not hand-edit)
-    bootstrap_state.json    # Current bootstrap phase and history (if present)
     ...                     # Other scheduler state files
 ```
 
@@ -139,12 +136,9 @@ The evaluator returns `{ verdict: PASS|FAIL, reasons, required_fixes, observatio
 
 An episode lives only inside a single heartbeat. Remaining work becomes the starting context for the next heartbeat's planner.
 
-## Bootstrap Gate
+## Software project development
 
-Your heartbeat is gated by a **PRD → Design → Done** lifecycle owned by the `bootstrap-sdlc` skill. The runner injects the current phase into every wake-up prompt.
-
-- Phase `done`: gate released, proceed normally.
-- Phase `prd` or `design`: **use the `bootstrap-sdlc` skill and obey it in full** before anything else this heartbeat.
+If the current task is software project development — building a new system/service/module/tool, or a substantial rework that changes architecture — use the `software-project-flow` skill and follow its PRD → Design → Implementation sequence, with human approval between phases. Do NOT use this skill for one-off answers, small fixes, scripts, research, operations, or any task that would finish within a heartbeat or two. When unsure, ask the human before activating.
 
 ## tool-notes/ — External Tool Documentation
 

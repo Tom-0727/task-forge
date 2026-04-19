@@ -17,7 +17,7 @@ Your prompt contains:
 
 The description is your primary evaluation input. Read the episode file for the stated `objective` and any Context Snapshot, then weigh the description against that objective.
 
-Check bootstrap phase first. Run `uv run python .agents/skills/bootstrap-sdlc/scripts/bootstrap_state.py phase` via shell. If the output is `prd` or `design`, use the `bootstrap-sdlc` skill and apply the stricter rules in its Evaluation Criteria section in addition to the normal protocol below.
+If the episode was carried out under the `software-project-flow` skill (its Context Snapshot or execution_guidance names `software_project_phase`), apply the stricter rules from that skill's Evaluation Criteria section in addition to the normal protocol below.
 
 ## Evaluation Protocol
 

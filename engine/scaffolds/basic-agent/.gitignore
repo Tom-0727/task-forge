@@ -1,0 +1,5 @@
+node_modules/
+trajectories/
+dist/
+.runs/
+probes/output-*.log
