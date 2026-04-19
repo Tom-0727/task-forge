@@ -4,8 +4,9 @@ _write_today.py — atomic-append helper for the todo skill.
 
 Appends a new Todo to the correct per-day file under
 `<agent_workdir>/todo_list/<YYYYMM>/<DD>.json`. Uses the write-to-tempfile
-+ os.replace pattern so concurrent writers (the agent's Edit/Write, the
-web-ui's POST /api/todos/write) do not corrupt the file.
++ os.replace pattern (delegated to `_common.atomic_write_json`) so
+concurrent writers (the agent's Edit/Write, the web-ui's POST
+/api/todos/write) do not corrupt the file.
 
 This is an INTERNAL utility — agents that are planning their own work
 should prefer direct Edit/Write on the day file. This helper exists for
@@ -19,11 +20,32 @@ the JSON field names do not encode the concept name.
 from __future__ import annotations
 
 import argparse
-import json
-import os
+import importlib.util
 import sys
 from datetime import date as _date, datetime
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+
+
+def _load_common():
+    for candidate in (_HERE / "_common.py", _HERE / "_common.py.tmpl"):
+        if candidate.exists():
+            loader = SourceFileLoader("_todo_common", str(candidate))
+            spec = importlib.util.spec_from_loader(loader.name, loader)
+            if spec is None:
+                continue
+            mod = importlib.util.module_from_spec(spec)
+            loader.exec_module(mod)
+            return mod
+    raise SystemExit(f"_common.py(.tmpl) not found in {_HERE}")
+
+
+_common = _load_common()
+allocate_next_id = _common.allocate_next_id
+atomic_write_json = _common.atomic_write_json
+load_list_json = _common.load_list_json
 
 
 def _parse_date(value: str | None) -> _date:
@@ -37,37 +59,6 @@ def _parse_date(value: str | None) -> _date:
 
 def _day_file(agent_workdir: Path, day: _date) -> Path:
     return agent_workdir / "todo_list" / day.strftime("%Y%m") / f"{day.strftime('%d')}.json"
-
-
-def _load_list(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"todo file at {path} is not valid JSON: {exc}") from exc
-    if not isinstance(data, list):
-        raise SystemExit(f"todo file at {path} must hold a JSON list; got {type(data).__name__}")
-    return data
-
-
-def _next_todo_id(todos: list[dict]) -> str:
-    max_n = 0
-    for item in todos:
-        tid = item.get("id", "")
-        if isinstance(tid, str) and tid.startswith("t") and tid[1:].isdigit():
-            max_n = max(max_n, int(tid[1:]))
-    return f"t{max_n + 1}"
-
-
-def _atomic_write(path: Path, payload: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    tmp.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(tmp, path)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -86,8 +77,8 @@ def main(argv: list[str] | None = None) -> int:
     day = _parse_date(args.date)
     path = _day_file(agent_workdir, day)
 
-    todos = _load_list(path)
-    new_id = _next_todo_id(todos)
+    todos = load_list_json(path)
+    new_id = allocate_next_id(todos, "t")
     todos.append(
         {
             "id": new_id,
@@ -97,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             "done": False,
         }
     )
-    _atomic_write(path, todos)
+    atomic_write_json(path, todos)
 
     print(new_id)
     return 0
