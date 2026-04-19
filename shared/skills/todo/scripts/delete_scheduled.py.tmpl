@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""
+delete_scheduled.py — remove a Scheduled Task by id from scheduled_tasks.json.
+
+Concept substitution point: "Scheduled Task". Rename mechanically if renamed upstream.
+
+Exits non-zero with a clear stderr line when the id does not exist, so an
+agent cannot silently miss the delete target. On success prints the deleted
+id to stdout and atomic-writes the remaining list.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import sys
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+
+
+def _load_common():
+    for candidate in (_HERE / "_common.py", _HERE / "_common.py.tmpl"):
+        if candidate.exists():
+            loader = SourceFileLoader("_todo_common", str(candidate))
+            spec = importlib.util.spec_from_loader(loader.name, loader)
+            if spec is None:
+                continue
+            mod = importlib.util.module_from_spec(spec)
+            loader.exec_module(mod)
+            return mod
+    raise SystemExit(f"_common.py(.tmpl) not found in {_HERE}")
+
+
+_common = _load_common()
+atomic_write_json = _common.atomic_write_json
+load_list_json = _common.load_list_json
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Delete a Scheduled Task by id.")
+    parser.add_argument("--id", required=True, dest="task_id")
+    parser.add_argument("--agent-workdir", default=None)
+    args = parser.parse_args(argv)
+
+    agent_workdir = (
+        Path(args.agent_workdir).resolve() if args.agent_workdir else Path.cwd().resolve()
+    )
+    store_path = agent_workdir / "scheduled_tasks.json"
+
+    items = load_list_json(store_path)
+    remaining = [item for item in items if item.get("id") != args.task_id]
+    if len(remaining) == len(items):
+        print(f"no scheduled task with id {args.task_id}", file=sys.stderr)
+        return 2
+
+    atomic_write_json(store_path, remaining)
+    print(args.task_id)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
