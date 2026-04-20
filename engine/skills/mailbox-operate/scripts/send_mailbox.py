@@ -46,10 +46,9 @@ def send_to_contact(
     contact_info: dict,
     message: str,
     task_id: str,
-    kind: str,
     await_reply: bool,
 ) -> dict:
-    extra = {"kind": kind, "await_reply": await_reply}
+    extra = {"await_reply": await_reply}
 
     local_mailbox = agent_dir / "mailbox" / contact_info["mailbox_file"]
 
@@ -90,7 +89,6 @@ def main() -> None:
     parser.add_argument("--to", default="human")
     parser.add_argument("--broadcast", action="store_true")
     parser.add_argument("--task-id", default="task.agent.message")
-    parser.add_argument("--kind", choices=["update", "question", "decision", "blocker"], default="update")
     parser.add_argument("--await-reply", action="store_true")
     parser.add_argument("--message")
     parser.add_argument("--agent-workdir", default=None)
@@ -110,7 +108,7 @@ def main() -> None:
             if info.get("type") != "agent":
                 continue
             entry = send_to_contact(
-                agent_dir, agent_name, name, info, message, args.task_id, args.kind, False
+                agent_dir, agent_name, name, info, message, args.task_id, False
             )
             results.append({"to": name, "id": entry["id"], "ts": entry["ts"]})
         print(json.dumps(results, ensure_ascii=False))
@@ -119,7 +117,7 @@ def main() -> None:
             raise SystemExit(f"contact '{args.to}' not found in contacts.json")
         entry = send_to_contact(
             agent_dir, agent_name, args.to, contacts[args.to], message,
-            args.task_id, args.kind, args.await_reply,
+            args.task_id, args.await_reply,
         )
         print(json.dumps({"id": entry["id"], "ts": entry["ts"]}, ensure_ascii=False))
 

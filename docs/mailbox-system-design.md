@@ -61,7 +61,6 @@ agent_workdir/
   "to": "clyd",
   "task_id": "task.agent.message",
   "message": "...",
-  "kind": "update",
   "await_reply": false
 }
 ```

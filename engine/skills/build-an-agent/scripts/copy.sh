@@ -1,5 +1,5 @@
 #!/bin/bash
-# fork.sh — copy the basic-agent scaffold into <dest> and (by default) install+build.
+# copy.sh — copy the basic-agent scaffold into <dest> and (by default) install+build.
 # The scaffold source lives at engine/scaffolds/basic-agent/ and is shared read-only;
 # this script always produces an independent, writable copy.
 set -euo pipefail
@@ -30,7 +30,7 @@ fi
 
 mkdir -p "$(dirname "$DEST")"
 cp -r "$SCAFFOLD" "$DEST"
-echo "[fork-basic-agent] copied scaffold -> $DEST"
+echo "[build-an-agent] copied scaffold -> $DEST"
 
 if [ -z "$NAME" ]; then
   NAME="$(basename "$DEST")"
@@ -45,11 +45,11 @@ with open(path, "w", encoding="utf-8") as f:
     json.dump(pkg, f, indent=2)
     f.write("\n")
 PY
-echo "[fork-basic-agent] set package.json name -> $NAME"
+echo "[build-an-agent] set package.json name -> $NAME"
 
 if [ "$DO_INSTALL" = "1" ]; then
   (cd "$DEST" && npm install && npm run build)
-  echo "[fork-basic-agent] installed + built"
+  echo "[build-an-agent] installed + built"
 else
-  echo "[fork-basic-agent] skipped install (--no-install)"
+  echo "[build-an-agent] skipped install (--no-install)"
 fi

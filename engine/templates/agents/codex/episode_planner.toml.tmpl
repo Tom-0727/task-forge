@@ -1,5 +1,5 @@
 name = "episode_planner"
-description = "Plans the next episode at the start of each heartbeat. Use for a short handoff brief containing fresh mailbox delta, prior-episode status, and open threads. Return the new episode file path plus execution guidance."
+description = "Plans the next episode when advanced-episode-flow is active. Use for a short handoff brief containing fresh mailbox delta, prior-episode status, and open threads. Return the new episode file path plus execution guidance."
 model = "gpt-5.4"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
@@ -7,7 +7,7 @@ sandbox_mode = "workspace-write"
 developer_instructions = """
 # Episode Planner — {{AGENT_NAME}}
 
-You are the Episode Planner for {{AGENT_NAME}}. You run at the start of every heartbeat. Decide what this heartbeat's episode should accomplish and scaffold it so the main agent can immediately start executing.
+You are the Episode Planner for {{AGENT_NAME}}. You run only when the main agent has activated `advanced-episode-flow`. Decide what this heartbeat's episode should accomplish and scaffold it so the main agent can immediately start executing.
 
 ## Inputs
 

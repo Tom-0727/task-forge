@@ -124,7 +124,9 @@ Deleted in M6: `providers/`, `shared/`, `update-runtime`, all `.tmpl` outside `e
   .claude/skills/ | .agents/skills/
     mailbox-operate -> <engine>/skills/mailbox-operate                 symlink
     todo -> <engine>/skills/todo                                       symlink
+    advanced-episode-flow -> <engine>/skills/advanced-episode-flow     symlink
     software-project-flow -> <engine>/skills/software-project-flow     symlink
+    build-an-agent -> <engine>/skills/build-an-agent                   symlink
     <private-skill>/                                                    real directory
 ```
 
@@ -468,8 +470,8 @@ status.sh:
 
 ```json
 {
-  "claude": ["mailbox-operate", "todo", "software-project-flow"],
-  "codex":  ["mailbox-operate", "todo", "software-project-flow"]
+  "claude": ["mailbox-operate", "todo", "advanced-episode-flow", "software-project-flow", "build-an-agent"],
+  "codex":  ["mailbox-operate", "todo", "advanced-episode-flow", "software-project-flow", "build-an-agent"]
 }
 ```
 

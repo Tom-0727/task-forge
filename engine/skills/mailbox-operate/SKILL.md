@@ -20,7 +20,7 @@ Read `mailbox/README.md`.
 Send to human (default):
 
 ```bash
-uv run python {skills-dir}/mailbox-operate/scripts/send_mailbox.py --kind update --message "Implemented the first pass."
+uv run python {skills-dir}/mailbox-operate/scripts/send_mailbox.py --message "Implemented the first pass."
 ```
 
 Send to another agent:
@@ -38,13 +38,13 @@ uv run python {skills-dir}/mailbox-operate/scripts/send_mailbox.py --broadcast -
 Need a reply and pause:
 
 ```bash
-uv run python {skills-dir}/mailbox-operate/scripts/send_mailbox.py --to human --kind decision --await-reply --message "Need decision: keep Claude support or remove it."
+uv run python {skills-dir}/mailbox-operate/scripts/send_mailbox.py --to human --await-reply --message "Need decision: keep Claude support or remove it."
 ```
 
 Multi-line from stdin:
 
 ```bash
-cat /tmp/message.txt | uv run python {skills-dir}/mailbox-operate/scripts/send_mailbox.py --kind blocker --await-reply
+cat /tmp/message.txt | uv run python {skills-dir}/mailbox-operate/scripts/send_mailbox.py --await-reply
 ```
 
 ## mailbox-read

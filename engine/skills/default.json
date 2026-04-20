@@ -1,4 +1,4 @@
 {
-  "claude": ["mailbox-operate", "todo", "software-project-flow", "fork-basic-agent"],
-  "codex": ["mailbox-operate", "todo", "software-project-flow", "fork-basic-agent"]
+  "claude": ["mailbox-operate", "todo", "advanced-episode-flow", "software-project-flow", "build-an-agent"],
+  "codex": ["mailbox-operate", "todo", "advanced-episode-flow", "software-project-flow", "build-an-agent"]
 }

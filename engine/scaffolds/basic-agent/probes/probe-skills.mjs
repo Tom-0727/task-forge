@@ -1,5 +1,5 @@
 // probe-skills.mjs — covers A10 (codex auto-discovery of .agents/skills/).
-// Runs from basic-agent/ so cwd contains .agents/skills/when-to-fork-basic-agent/SKILL.md.
+// Runs from basic-agent/ so cwd contains .agents/skills/sample-discovered-skill/SKILL.md.
 // Success: the agent surfaces the skill name in its reply without programmatic registration.
 import { Codex } from "@openai/codex-sdk";
 
@@ -15,7 +15,7 @@ const safety = setTimeout(() => {
 
 try {
   const turn = await thread.runStreamed(
-    "List every skill currently available to you. For each, print its name on a separate line. If a skill named 'when-to-fork-basic-agent' is available, print the literal token WHEN-TO-FORK-SENTINEL-SEEN right after its name."
+    "List every skill currently available to you. For each, print its name on a separate line. If a skill named 'sample-discovered-skill' is available, print the literal token SAMPLE-SKILL-SENTINEL-SEEN right after its name."
   );
   const agentTextChunks = [];
   const eventTypes = [];
@@ -27,8 +27,8 @@ try {
   }
   clearTimeout(safety);
   const combined = agentTextChunks.join("\n");
-  const sentinelSeen = combined.includes("WHEN-TO-FORK-SENTINEL-SEEN");
-  const nameSeen = /when-to-fork-basic-agent/i.test(combined);
+  const sentinelSeen = combined.includes("SAMPLE-SKILL-SENTINEL-SEEN");
+  const nameSeen = /sample-discovered-skill/i.test(combined);
   const summary = {
     probe: "probe-skills",
     verdict: sentinelSeen ? "pass" : nameSeen ? "name-only" : "fail",

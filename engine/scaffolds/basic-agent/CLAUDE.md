@@ -1,6 +1,6 @@
 # basic-agent — Root CLAUDE.md (Decision Layer)
 
-This is the scaffold for building a vertical-scenario agent on top of the `@openai/codex-sdk` runtime. When adapting it, fork or copy `basic-agent/`; do not turn the scaffold itself into a business-specific agent unless explicitly asked.
+This is the scaffold for building a vertical-scenario agent on top of the `@openai/codex-sdk` runtime. When adapting it, copy `basic-agent/`; do not turn the scaffold itself into a business-specific agent unless explicitly asked.
 
 ## Two-Layer Customization Mental Model
 
@@ -20,10 +20,10 @@ Customize only these two layers unless the task explicitly requires changing the
 - Do not edit `src/runtime/` or `src/trajectory/` unless you are intentionally changing the runtime contract. Those are stable.
 - Use OS scheduling. Prefer cron on Linux. Do not add a scheduler daemon. Keep every scheduler path invoking the same one-shot entry with identical `WakeUpArgs`.
 - Trajectories are JSONL — one file per run, one codex event per line, verbatim pass-through.
-- `basic-agent/` is not a vertical agent. Fork or clone it to make one.
+- `basic-agent/` is not a vertical agent. Copy it to make one.
 
 ## Where to look next
 
 - `src/CLAUDE.md` — execution layer for TypeScript code inside `src/`.
 - `scripts/CLAUDE.md` — execution layer for shell entries.
-- `AGENTS.md` — the default durable per-agent system prompt (replace it in your fork).
+- `AGENTS.md` — the default durable per-agent system prompt (replace it in your copy).
