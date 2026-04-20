@@ -161,8 +161,8 @@ Agent 的实时状态不存储在 Registry 中，而是每次请求时从 Agent 
 
 Claude / Codex SDK 均未暴露稳定的 rate-limit / quota 事件。平台改用各自 CLI 的 `/status` 命令作为唯一可靠数据源：
 
-- `tmp/capture_claude_usage_tmux.sh` 启动一个临时 tmux session 运行 `claude`，发送 `/status` 并抓取 Usage 面板文本。
-- `tmp/capture_codex_status_tmux.sh` 同理，启动 `codex` 并抓取 `/status` 面板。
+- `platform/scripts/capture_claude_usage_tmux.sh` 启动一个临时 tmux session 运行 `claude`，发送 `/status` 并抓取 Usage 面板文本。
+- `platform/scripts/capture_codex_status_tmux.sh` 同理，启动 `codex` 并抓取 `/status` 面板。
 
 两段脚本产出的都是带盒线字符的纯文本快照。
 
@@ -388,7 +388,7 @@ platform/
 
 - 从 UI 创建 Agent（调用 deploy-agent）
 - `--interaction platform` 模式
-- LLM 配额采集（`platform/usage.py` 调用 `tmp/capture_*_tmux.sh`）
+- LLM 配额采集（`platform/usage.py` 调用 `platform/scripts/capture_*_tmux.sh`）
 - LLM 配额看板
 
 ### Phase 3：增强

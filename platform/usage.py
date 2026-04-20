@@ -1,8 +1,9 @@
 """LLM quota snapshots for Claude and Codex CLIs.
 
-Launches the tmp/capture_*_tmux.sh scripts (which spawn a short-lived
-claude/codex session, send /status, and capture the pane), parses the
-resulting text into structured data, and caches it in memory + on disk.
+Launches the platform/scripts/capture_*_tmux.sh scripts (which spawn a
+short-lived claude/codex session, send /status, and capture the pane),
+parses the resulting text into structured data, and caches it in memory
+and on disk.
 
 A background thread refreshes the snapshot once per hour so that
 /api/usage stays cheap for the frontend.
@@ -19,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HARNESS_DIR = Path(__file__).resolve().parent.parent
-SCRIPTS_DIR = HARNESS_DIR / "tmp"
+SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
 CACHE_FILE = Path(__file__).resolve().parent / ".usage_cache.json"
 
 REFRESH_INTERVAL_SECONDS = 3600  # 1 hour
