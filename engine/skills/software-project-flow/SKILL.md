@@ -5,8 +5,6 @@ description: On-demand workflow for software project development. Use when the t
 
 # software-project-flow
 
-Paths below use `{skills-dir}` — resolve via the agent's rules file (CLAUDE.md → `.claude/skills`; AGENTS.md → `.agents/skills`).
-
 This skill is **on-demand**. It is NOT the default mode. Most heartbeats do not need it.
 
 Three sections follow, one per audience — read the one that applies to you: **Protocol** (main agent), **Planning Mode** (episode planner), **Evaluation Criteria** (episode evaluator).

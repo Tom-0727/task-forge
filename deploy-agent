@@ -22,27 +22,39 @@ ENGINE_ROOT = REPO_ROOT / "engine"
 TEMPLATE_DIR = ENGINE_ROOT / "templates"
 ENGINE_SKILLS_DIR = ENGINE_ROOT / "skills"
 SKILL_DEFAULTS_FILE = ENGINE_SKILLS_DIR / "default.json"
+RULES_TEMPLATE = "agent-rules.md.tmpl"
 
 PROVIDER_CONFIG = {
     "claude": {
+        "provider_name": "Claude",
         "rules_filename": "CLAUDE.md",
-        "rules_tmpl": "CLAUDE.md.tmpl",
         "skill_root": ".claude/skills",
         "subagent_root": ".claude/agents",
         "subagent_dir": "agents/claude",
         "subagent_suffix": ".md",
         "episode_planner_name": "episode-planner",
         "episode_evaluator_name": "episode-evaluator",
+        "workspace_provider_layout": "\n".join((
+            "  .claude/",
+            "    skills/                 # Auto-discovered skills (shared are symlinks, private are real dirs)",
+            "    agents/                 # Provider-native subagent definitions",
+        )),
     },
     "codex": {
+        "provider_name": "Codex",
         "rules_filename": "AGENTS.md",
-        "rules_tmpl": "AGENTS.md.tmpl",
         "skill_root": ".agents/skills",
         "subagent_root": ".codex/agents",
         "subagent_dir": "agents/codex",
         "subagent_suffix": ".toml",
         "episode_planner_name": "episode_planner",
         "episode_evaluator_name": "episode_evaluator",
+        "workspace_provider_layout": "\n".join((
+            "  .agents/",
+            "    skills/                 # Auto-discovered skills (shared are symlinks, private are real dirs)",
+            "  .codex/",
+            "    agents/                 # Provider-native subagent definitions (*.toml)",
+        )),
     },
 }
 
@@ -215,6 +227,10 @@ def scaffold_workspace(workdir: Path, agent_name: str, goal: str, provider: str)
         "GOAL": goal,
         "CREATED_AT": created_at,
         "CREATED_DATE": created_date,
+        "PROVIDER_NAME": cfg["provider_name"],
+        "RULES_FILENAME": cfg["rules_filename"],
+        "SKILLS_DIR": cfg["skill_root"],
+        "WORKSPACE_PROVIDER_LAYOUT": cfg["workspace_provider_layout"],
         "EPISODE_PLANNER_NAME": cfg["episode_planner_name"],
         "EPISODE_EVALUATOR_NAME": cfg["episode_evaluator_name"],
     }
@@ -235,7 +251,7 @@ def scaffold_workspace(workdir: Path, agent_name: str, goal: str, provider: str)
         (workdir / sub).mkdir(parents=True, exist_ok=True)
 
     write(workdir / cfg["rules_filename"],
-          render(TEMPLATE_DIR / cfg["rules_tmpl"], replacements))
+          render(TEMPLATE_DIR / RULES_TEMPLATE, replacements))
 
     write(workdir / "Memory" / "knowledge" / "README.md",
           render(TEMPLATE_DIR / "knowledge-README.md.tmpl", replacements))

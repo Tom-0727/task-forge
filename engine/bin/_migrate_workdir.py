@@ -53,6 +53,34 @@ LEGACY_RUNTIME_FILES = [
 ]
 
 LEGACY_SKILL_LINKS = ["bootstrap-sdlc"]
+RULES_TEMPLATE = "agent-rules.md.tmpl"
+PROVIDER_RULES_CONFIG = {
+    "claude": {
+        "provider_name": "Claude",
+        "rules_filename": "CLAUDE.md",
+        "skill_root": ".claude/skills",
+        "workspace_provider_layout": "\n".join((
+            "  .claude/",
+            "    skills/                 # Auto-discovered skills (shared are symlinks, private are real dirs)",
+            "    agents/                 # Provider-native subagent definitions",
+        )),
+        "episode_planner_name": "episode-planner",
+        "episode_evaluator_name": "episode-evaluator",
+    },
+    "codex": {
+        "provider_name": "Codex",
+        "rules_filename": "AGENTS.md",
+        "skill_root": ".agents/skills",
+        "workspace_provider_layout": "\n".join((
+            "  .agents/",
+            "    skills/                 # Auto-discovered skills (shared are symlinks, private are real dirs)",
+            "  .codex/",
+            "    agents/                 # Provider-native subagent definitions (*.toml)",
+        )),
+        "episode_planner_name": "episode_planner",
+        "episode_evaluator_name": "episode_evaluator",
+    },
+}
 
 
 def utcnow_iso() -> str:
@@ -199,12 +227,9 @@ def write_agent_json(workdir: Path, ident: dict, engine_version: str) -> Path:
 
 def render_rules_file(workdir: Path, engine_root: Path, ident: dict) -> Path | None:
     provider = ident["provider"]
-    cfg = {
-        "claude": ("CLAUDE.md.tmpl", "CLAUDE.md"),
-        "codex": ("AGENTS.md.tmpl", "AGENTS.md"),
-    }[provider]
-    tmpl = engine_root / "templates" / cfg[0]
-    dst = workdir / cfg[1]
+    cfg = PROVIDER_RULES_CONFIG[provider]
+    tmpl = engine_root / "templates" / RULES_TEMPLATE
+    dst = workdir / cfg["rules_filename"]
     if not tmpl.exists():
         return None
     goal = ""
@@ -214,10 +239,12 @@ def render_rules_file(workdir: Path, engine_root: Path, ident: dict) -> Path | N
     replacements = {
         "AGENT_NAME": ident["agent_name"],
         "GOAL": goal,
-        "EPISODE_PLANNER_NAME":
-            "episode-planner" if provider == "claude" else "episode_planner",
-        "EPISODE_EVALUATOR_NAME":
-            "episode-evaluator" if provider == "claude" else "episode_evaluator",
+        "PROVIDER_NAME": cfg["provider_name"],
+        "RULES_FILENAME": cfg["rules_filename"],
+        "SKILLS_DIR": cfg["skill_root"],
+        "WORKSPACE_PROVIDER_LAYOUT": cfg["workspace_provider_layout"],
+        "EPISODE_PLANNER_NAME": cfg["episode_planner_name"],
+        "EPISODE_EVALUATOR_NAME": cfg["episode_evaluator_name"],
     }
     body = tmpl.read_text(encoding="utf-8")
     for k, v in replacements.items():

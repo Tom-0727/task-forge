@@ -11,8 +11,6 @@ Use this skill for all mailbox operations. It provides three commands:
 - `mailbox-read`: read messages from a specific contact or get unread summary
 - `mailbox-contacts`: list all contacts
 
-Paths below use `{skills-dir}` — resolve via the agent's top-level rules file (CLAUDE.md for Claude → `.claude/skills`; AGENTS.md for Codex → `.agents/skills`).
-
 ## Before first use
 
 Read `mailbox/README.md`.

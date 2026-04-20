@@ -25,7 +25,7 @@ engine/                         # shared runtime, one install per host
   bin/                          # start.sh, stop.sh, engine-ensure.sh, refresh-skills.sh, migrate-workdir.sh, status.sh
   skills/                       # shared skills (symlinked into each workdir)
   skills/default.json           # which shared skills to link per provider
-  templates/                    # CLAUDE.md / AGENTS.md / subagents / mailbox scaffolding
+  templates/                    # agent rules / subagents / mailbox scaffolding
   src/                          # TypeScript: harness-core, claude/, codex/, supervisor/, bridge/, web-ui/
   dist/                         # tsc output (gitignored, auto-rebuilt by engine-ensure.sh)
 deploy-agent                    # scaffolds a new shim workdir

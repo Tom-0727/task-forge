@@ -42,5 +42,3 @@ After forking:
 2. Leave `src/runtime/` and `src/trajectory/` alone unless you are intentionally changing the runtime contract.
 3. Add capabilities as skills under `.agents/skills/<skill-name>/`; codex auto-discovers them.
 4. Wire scheduling via cron (see `scripts/cron.example`) — do not add a scheduler daemon.
-
-`{skills-dir}` resolves via the agent's rules file: CLAUDE.md → `.claude/skills`, AGENTS.md → `.agents/skills`.
