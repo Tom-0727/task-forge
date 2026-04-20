@@ -19,18 +19,16 @@ Do NOT use this skill for:
 - acknowledging, answering, or clarifying a simple human message;
 - short status reports;
 - mailbox-only coordination that does not change project state;
-- any response where creating an episode and invoking planner/evaluator would add more overhead than value.
-
-When the current task is software project development, use `software-project-flow` inside this skill if its scope rules apply.
+- any response where creating an episode and invoking planner/executor/evaluator would add more overhead than value.
 
 ## Protocol
 
-Each advanced heartbeat runs exactly one episode composed of three phases: plan -> execute -> evaluate. Do not skip phases, and do not carry an episode across heartbeats.
+Each advanced heartbeat runs exactly one episode composed of three phases: plan -> execute -> evaluate. Do not skip phases, and do not carry an episode across heartbeats. The main agent is the decision-information router: it keeps planner rationale, executor evidence, and evaluator judgment in its own context, while leaving raw execution noise inside the executor subagent.
 
 Provider subagent names:
 
-- Codex: planner `episode_planner`, evaluator `episode_evaluator`
-- Claude: planner `episode-planner`, evaluator `episode-evaluator`
+- Codex: planner `episode_planner`, executor `episode_executor`, evaluator `episode_evaluator`
+- Claude: planner `episode-planner`, executor `episode-executor`, evaluator `episode-evaluator`
 
 ### Phase 1 - Plan
 
@@ -41,9 +39,9 @@ Situation Sync:
 1. Treat the heartbeat wake-up prompt as authoritative about fresh mailbox state. If it lists newly-arrived messages, run `uv run python {skills-dir}/mailbox-operate/scripts/read_mailbox.py --summary` once to see them all, then `uv run python {skills-dir}/mailbox-operate/scripts/read_mailbox.py --from <contact>` only for any message whose full text is needed. If the wake-up prompt reports no new messages, skip the mailbox entirely.
 2. From working memory, recall the prior episode's outcome in one line (completed / failed + brief reason) and any open threads, constraints, or unresolved questions that files alone cannot convey.
 
-Handoff to the episode planner:
+Main -> planner handoff:
 
-Spawn the provider's episode planner subagent with a short handoff brief: pointers and scarce facts only, not a dump. The brief must contain:
+Spawn the provider's episode planner subagent with a short handoff brief: pointers and scarce facts only, not a dump. The brief should cover:
 
 - a 1-3 line summary per newly-arrived mailbox message, each with a pointer such as `mailbox/human.jsonl` and the mailbox id; omit this if the wake-up prompt reported no new messages;
 - a one-line status of the prior episode plus its file path;
@@ -52,40 +50,37 @@ Spawn the provider's episode planner subagent with a short handoff brief: pointe
 
 Do not paste full message bodies, entire prior episodes, or the main agent's own analysis into the brief.
 
-The planner returns:
+Planner -> main return:
 
-```json
-{
-  "episode_path": "<path>",
-  "execution_guidance": "<briefing>"
-}
-```
-
-Treat `execution_guidance` as the primary input for Phase 2.
+The planner should return a compact, structured planning brief rather than a rigid schema. It should cover the episode path, the selected objective, why that objective was selected, key assumptions, execution direction, risks or stop conditions, and evidence the executor should try to produce. Treat the planner's execution guidance as the primary planning input for Phase 2, but keep enough rationale in the main context to judge whether the executor's later deviations are acceptable.
 
 ### Phase 2 - Execute
 
-Follow the planner's `execution_guidance` and carry out the work toward the episode objective.
+Main -> executor handoff:
 
-Append only decision-relevant observations and key evidence to the episode body. Keep the file concise.
+Spawn the provider's episode executor subagent. Do not make the executor rediscover the planner's output. Give it an execution packet prepared by the main agent, including:
+
+- `episode_path` and the episode objective;
+- the planner's execution guidance and any planner rationale that affects execution choices;
+- constraints, commitments, or risk boundaries the main agent accepts;
+- the evidence that would make the episode judgeable;
+- stop-and-report conditions such as external side effects, irreversible actions, material cost, permissions, or a load-bearing ambiguity.
+
+The executor has the broadest practical execution permissions. It may inspect files, edit files, run tests or commands, use available docs/search tools, and otherwise do the concrete work needed for the episode. Boundaries are prompt-level rather than narrow tool restrictions: if an action is high-risk, irreversible, externally visible, costly, or requires human authorization, the executor stops and reports to the main agent instead of proceeding.
+
+Executor -> main return:
+
+The executor should return a concise execution report, not raw logs. The report should give the main agent enough decision information to route evaluation without absorbing execution noise: what changed, artifacts produced, key decisions made, deviations from the planner, verification performed, evidence pointers, unresolved ambiguity, remaining risk, and blockers. The executor should also append concise Actions Taken and Key Evidence entries to the episode file, but it must not set final `status`.
 
 ### Phase 3 - Evaluate
 
-Spawn the provider's episode evaluator subagent. The invocation prompt must include both:
+Main -> evaluator handoff:
 
-1. `episode_path`
-2. A detailed description of what was actually done: actions taken, artifacts produced, evidence collected, and ambiguities noticed.
+Spawn the provider's episode evaluator subagent. Give it `episode_path`, the executor's execution report, and any main-agent context needed to evaluate the attempt, such as retry round, evaluator fixes already addressed, accepted constraints, or known ambiguity. The evaluator may inspect files and verify claims directly, but its primary input is the main-routed execution report rather than the executor's raw transcript.
 
-The evaluator returns:
+Evaluator -> main return:
 
-```json
-{
-  "verdict": "PASS | FAIL",
-  "reasons": ["..."],
-  "required_fixes": ["..."],
-  "observations": ["..."]
-}
-```
+The evaluator should return a compact judgment, not a rigid schema. It should clearly state PASS or FAIL, the evidence-backed reasons, any required fixes that an executor can act on, and any durable observations worth considering for knowledge or skill promotion.
 
 On PASS:
 
@@ -95,9 +90,9 @@ On PASS:
 
 On FAIL:
 
-- address each item in `required_fixes`;
+- spawn the executor again with a retry packet derived from the evaluator's required fixes, the prior execution report, and any main-agent decisions;
 - increment `eval_rounds`;
-- re-invoke the evaluator with an updated detailed description;
+- re-invoke the evaluator with the updated executor report and retry context;
 - stop after 3 evaluation rounds.
 
 On 3 rounds still FAIL, or on an execution-blocking obstacle that cannot be worked around:

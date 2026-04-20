@@ -65,6 +65,7 @@ PROVIDER_RULES_CONFIG = {
             "    agents/                 # Provider-native subagent definitions",
         )),
         "episode_planner_name": "episode-planner",
+        "episode_executor_name": "episode-executor",
         "episode_evaluator_name": "episode-evaluator",
     },
     "codex": {
@@ -78,6 +79,7 @@ PROVIDER_RULES_CONFIG = {
             "    agents/                 # Provider-native subagent definitions (*.toml)",
         )),
         "episode_planner_name": "episode_planner",
+        "episode_executor_name": "episode_executor",
         "episode_evaluator_name": "episode_evaluator",
     },
 }
@@ -244,6 +246,7 @@ def render_rules_file(workdir: Path, engine_root: Path, ident: dict) -> Path | N
         "SKILLS_DIR": cfg["skill_root"],
         "WORKSPACE_PROVIDER_LAYOUT": cfg["workspace_provider_layout"],
         "EPISODE_PLANNER_NAME": cfg["episode_planner_name"],
+        "EPISODE_EXECUTOR_NAME": cfg["episode_executor_name"],
         "EPISODE_EVALUATOR_NAME": cfg["episode_evaluator_name"],
     }
     body = tmpl.read_text(encoding="utf-8")
@@ -256,10 +259,22 @@ def render_rules_file(workdir: Path, engine_root: Path, ident: dict) -> Path | N
 def render_subagents(workdir: Path, engine_root: Path, ident: dict) -> list[Path]:
     provider = ident["provider"]
     cfg = {
-        "claude": {"dir": "agents/claude", "root": ".claude/agents", "suffix": ".md",
-                   "planner": "episode-planner", "evaluator": "episode-evaluator"},
-        "codex": {"dir": "agents/codex", "root": ".codex/agents", "suffix": ".toml",
-                  "planner": "episode_planner", "evaluator": "episode_evaluator"},
+        "claude": {
+            "dir": "agents/claude",
+            "root": ".claude/agents",
+            "suffix": ".md",
+            "planner": "episode-planner",
+            "executor": "episode-executor",
+            "evaluator": "episode-evaluator",
+        },
+        "codex": {
+            "dir": "agents/codex",
+            "root": ".codex/agents",
+            "suffix": ".toml",
+            "planner": "episode_planner",
+            "executor": "episode_executor",
+            "evaluator": "episode_evaluator",
+        },
     }[provider]
     src_dir = engine_root / "templates" / cfg["dir"]
     dst_dir = workdir / cfg["root"]
@@ -267,6 +282,7 @@ def render_subagents(workdir: Path, engine_root: Path, ident: dict) -> list[Path
     replacements = {
         "AGENT_NAME": ident["agent_name"],
         "EPISODE_PLANNER_NAME": cfg["planner"],
+        "EPISODE_EXECUTOR_NAME": cfg["executor"],
         "EPISODE_EVALUATOR_NAME": cfg["evaluator"],
     }
     suffix = cfg["suffix"] + ".tmpl"
@@ -328,12 +344,31 @@ def main() -> int:
     ap.add_argument("--engine-root", required=True)
     ap.add_argument("--repo-root", required=True)
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--refresh-subagents-only", action="store_true")
     args = ap.parse_args()
 
     workdir = Path(args.agent_dir).resolve()
     engine_root = Path(args.engine_root).resolve()
 
     agent_json = workdir / "Runtime" / "agent.json"
+    if args.refresh_subagents_only:
+        if not agent_json.exists():
+            raise SystemExit(f"missing Runtime/agent.json: {agent_json}")
+        existing = json.loads(agent_json.read_text(encoding="utf-8"))
+        ident = {
+            "agent_name": existing["agent_name"],
+            "provider": existing["provider"],
+            "interaction_mode": existing["interaction"]["mode"],
+            "web_ui_port": existing["interaction"].get("web_ui_port"),
+            "feishu": existing["interaction"].get("feishu"),
+            "interval": existing["runtime"]["default_interval_minutes"],
+        }
+        rendered = render_subagents(workdir, engine_root, ident)
+        print(f"[migrate] refreshed {len(rendered)} subagent files")
+        for p in rendered:
+            print(f"  - {p.relative_to(workdir)}")
+        return 0
+
     if agent_json.exists():
         existing = json.loads(agent_json.read_text(encoding="utf-8"))
         ident = {

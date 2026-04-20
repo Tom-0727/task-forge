@@ -6,7 +6,7 @@ Bounded execution records for {{AGENT_NAME}}, created when `advanced-episode-flo
 
 ## Keep Episode Files Concise
 
-The episode file is the durable, decision-relevant record — **not** the place where full execution context flows. Detailed planning briefings and detailed evaluation reasoning are passed between the main agent and its subagents (`{{EPISODE_PLANNER_NAME}}`, `{{EPISODE_EVALUATOR_NAME}}`) via prompts and return values, not by dumping them here. Put only what the agent itself will need when reading this episode back later.
+The episode file is the durable, decision-relevant record — **not** the place where full execution context flows. Planning, execution, and evaluation details are routed between the main agent and its subagents (`{{EPISODE_PLANNER_NAME}}`, `{{EPISODE_EXECUTOR_NAME}}`, `{{EPISODE_EVALUATOR_NAME}}`) via concise prompts and return values, not by dumping raw transcripts here. Put only what the agent itself will need when reading this episode back later.
 
 ## Unit of Record
 
@@ -81,7 +81,7 @@ Status meaning:
 - `completed` — the evaluator returned PASS for this episode's objective.
 - `failed` — the evaluator returned FAIL after the 3-round soft cap, or execution hit an unrecoverable blocker.
 
-An episode file with no `status` field is mid-flight and not authoritative. The planner creates the file without `status`; the main agent writes it at the end of the heartbeat when the outcome is decided.
+An episode file with no `status` field is mid-flight and not authoritative. The planner creates the file without `status`; the executor appends concise Actions Taken and Key Evidence during execution; the main agent writes final `status` at the end of the heartbeat when the outcome is decided.
 
 `eval_rounds` is the counter for the per-episode evaluator retry cap. It starts at 0 and is incremented every time the main agent re-invokes the evaluator for this episode.
 
