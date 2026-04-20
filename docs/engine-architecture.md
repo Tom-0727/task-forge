@@ -64,8 +64,7 @@ repo-root/
         SKILL.md
       default.json            { "claude": [...], "codex": [...] }
     templates/
-      CLAUDE.md.tmpl
-      AGENTS.md.tmpl
+      agent-rules.md.tmpl
       MAILBOX.jsonl.tmpl
       memory-knowledge-README.md.tmpl
       memory-episodes-README.md.tmpl
@@ -498,7 +497,7 @@ Shell script, ≤300 lines. Steps:
 2. Validate: `--interaction feishu` requires feishu args; `--interaction web-ui` forbids them; workdir is absolute.
 3. Create workdir skeleton: `mailbox/`, `Memory/knowledge/`, `Memory/episodes/`, `tool-notes/`, `Runtime/`, `Runtime/pids/`, `Runtime/logs/`, `todo_list/`, `.claude/skills/` or `.agents/skills/`.
 4. Write `Runtime/agent.json` (immutable + mutable fields).
-5. Render `CLAUDE.md` or `AGENTS.md` from `engine/templates/*.md.tmpl` (substitute AGENT_NAME, GOAL, CREATED_AT). Render README files for `Memory/knowledge/`, `Memory/episodes/`, `mailbox/`, `tool-notes/`.
+5. Render provider-native `CLAUDE.md` or `AGENTS.md` from `engine/templates/agent-rules.md.tmpl` (substitute AGENT_NAME, GOAL, CREATED_AT, provider paths). Render README files for `Memory/knowledge/`, `Memory/episodes/`, `mailbox/`, `tool-notes/`.
 6. Seed first instruction to `mailbox/human.jsonl`.
 7. Create `mailbox/contacts.json` with `human` entry.
 8. For feishu: write `mailbox_bridge.env` from CLI args.

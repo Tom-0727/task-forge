@@ -5,8 +5,6 @@ description: Todo list mechanism for the long-run agent. Two concepts — Todo (
 
 # todo
 
-Paths below use `{skills-dir}` — resolve via the agent's rules file (CLAUDE.md → `.claude/skills`; AGENTS.md → `.agents/skills`).
-
 Use this skill to persist multi-step, time-bound, or cross-heartbeat work.
 It provides two concepts:
 
