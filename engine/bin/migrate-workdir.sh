@@ -5,10 +5,12 @@ set -euo pipefail
 
 AGENT_DIR=""
 APPLY="0"
+REFRESH_SUBAGENTS_ONLY="0"
 while [ $# -gt 0 ]; do
   case "$1" in
     --agent-dir) AGENT_DIR="$2"; shift 2 ;;
     --apply)     APPLY="1"; shift ;;
+    --refresh-subagents-only) REFRESH_SUBAGENTS_ONLY="1"; shift ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -23,4 +25,5 @@ exec python3 "$REPO_ROOT/engine/bin/_migrate_workdir.py" \
   --agent-dir "$AGENT_DIR" \
   --engine-root "$ENGINE_ROOT" \
   --repo-root "$REPO_ROOT" \
-  $([ "$APPLY" = "1" ] && echo --apply)
+  $([ "$APPLY" = "1" ] && echo --apply) \
+  $([ "$REFRESH_SUBAGENTS_ONLY" = "1" ] && echo --refresh-subagents-only)
