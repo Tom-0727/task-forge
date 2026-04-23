@@ -60,6 +60,22 @@ export interface AppServerLogger {
   error: (m: string) => void;
 }
 
+const DEFAULT_RPC_TIMEOUT_MS = 60_000;
+const DEFAULT_TURN_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_COMPACT_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_STOP_TIMEOUT_MS = 10_000;
+
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class CodexAppServerClient {
   private proc: ChildProcessWithoutNullStreams | null = null;
   private rl: readline.Interface | null = null;
@@ -69,6 +85,11 @@ export class CodexAppServerClient {
   private clientInfo: { name: string; title: string; version: string };
   private initialized = false;
   private exitPromise: Promise<void> | null = null;
+  private exitHandlers = new Set<(err: Error) => void>();
+  private rpcTimeoutMs = envMs("HARNESS_CODEX_RPC_TIMEOUT_MS", DEFAULT_RPC_TIMEOUT_MS);
+  private turnTimeoutMs = envMs("HARNESS_CODEX_TURN_TIMEOUT_MS", DEFAULT_TURN_TIMEOUT_MS);
+  private compactTimeoutMs = envMs("HARNESS_CODEX_COMPACT_TIMEOUT_MS", DEFAULT_COMPACT_TIMEOUT_MS);
+  private stopTimeoutMs = envMs("HARNESS_CODEX_STOP_TIMEOUT_MS", DEFAULT_STOP_TIMEOUT_MS);
 
   constructor(log: AppServerLogger, clientInfo?: Partial<{ name: string; title: string; version: string }>) {
     this.log = log;
@@ -101,6 +122,7 @@ export class CodexAppServerClient {
     this.exitPromise = new Promise<void>((resolve) => {
       proc.on("exit", (code, sig) => {
         this.log.warn(`app-server exited code=${code ?? "?"} sig=${sig ?? ""}`);
+        const err = new Error(`app-server exited code=${code ?? "?"} sig=${sig ?? ""}`);
         this.proc = null;
         this.rl?.close();
         this.rl = null;
@@ -109,6 +131,13 @@ export class CodexAppServerClient {
           p.reject(new Error(`app-server exited before ${p.method} completed`));
         }
         this.pending.clear();
+        for (const h of Array.from(this.exitHandlers)) {
+          try {
+            h(err);
+          } catch {
+            /* ignore */
+          }
+        }
         resolve();
       });
     });
@@ -119,8 +148,23 @@ export class CodexAppServerClient {
 
   async stop(): Promise<void> {
     if (!this.proc) return;
-    this.proc.kill("SIGTERM");
-    await this.exitPromise;
+    const proc = this.proc;
+    proc.kill("SIGTERM");
+    const exit = this.exitPromise ?? Promise.resolve();
+    const timedOut = await Promise.race([
+      exit.then(() => false),
+      sleep(this.stopTimeoutMs).then(() => true),
+    ]);
+    if (timedOut && this.proc === proc) {
+      this.log.warn(`app-server did not exit after ${this.stopTimeoutMs}ms; killing`);
+      proc.kill("SIGKILL");
+      await exit;
+    }
+  }
+
+  async restart(): Promise<void> {
+    await this.stop();
+    await this.start();
   }
 
   isAlive(): boolean {
@@ -179,20 +223,46 @@ export class CodexAppServerClient {
     }
   }
 
+  private onExit(handler: (err: Error) => void): () => void {
+    this.exitHandlers.add(handler);
+    return () => {
+      this.exitHandlers.delete(handler);
+    };
+  }
+
   private request<T>(method: string, params: unknown): Promise<T> {
     if (!this.proc) return Promise.reject(new Error("app-server not running"));
     const id = this.nextId++;
     const body = JSON.stringify({ jsonrpc: "2.0", id, method, params });
     return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.pending.delete(id);
+        reject(new Error(`rpc ${method} timed out after ${this.rpcTimeoutMs}ms`));
+      }, this.rpcTimeoutMs);
+      const settleResolve = (v: unknown): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(v as T);
+      };
+      const settleReject = (err: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      };
       this.pending.set(id, {
         method,
-        resolve: (v) => resolve(v as T),
-        reject,
+        resolve: settleResolve,
+        reject: settleReject,
       });
       this.proc!.stdin.write(body + "\n", (err) => {
         if (err) {
           this.pending.delete(id);
-          reject(err);
+          settleReject(err);
         }
       });
     });
@@ -221,9 +291,28 @@ export class CodexAppServerClient {
   async runTurn(opts: TurnStartOptions, handlers: TurnHandlers = {}): Promise<TurnCompletedEvent> {
     return new Promise<TurnCompletedEvent>((resolve, reject) => {
       const disposers: Array<() => void> = [];
+      let settled = false;
       const cleanup = (): void => {
         for (const d of disposers) d();
+        clearTimeout(timer);
       };
+      const settleResolve = (v: TurnCompletedEvent): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(v);
+      };
+      const settleReject = (err: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      };
+      const timer = setTimeout(() => {
+        settleReject(new Error(`turn timed out after ${this.turnTimeoutMs}ms`));
+      }, this.turnTimeoutMs);
+
+      disposers.push(this.onExit((err) => settleReject(err)));
 
       disposers.push(
         this.onNotification("item/completed", (params) => {
@@ -250,16 +339,14 @@ export class CodexAppServerClient {
         this.onNotification("turn/completed", (params) => {
           const p = params as TurnCompletedEvent;
           if (p.threadId !== opts.threadId) return;
-          cleanup();
-          resolve(p);
+          settleResolve(p);
         })
       );
       disposers.push(
         this.onNotification("turn/failed", (params) => {
           const p = params as TurnFailedEvent;
           if (p.threadId !== opts.threadId) return;
-          cleanup();
-          reject(new Error(`turn failed: ${p.error?.message ?? "unknown"}`));
+          settleReject(new Error(`turn failed: ${p.error?.message ?? "unknown"}`));
         })
       );
 
@@ -267,8 +354,7 @@ export class CodexAppServerClient {
         threadId: opts.threadId,
         input: [{ type: "text", text: opts.text }],
       }).catch((err) => {
-        cleanup();
-        reject(err);
+        settleReject(err);
       });
     });
   }
@@ -276,9 +362,28 @@ export class CodexAppServerClient {
   async compactThread(threadId: string, handlers: CompactHandlers = {}): Promise<TurnCompletedEvent> {
     return new Promise<TurnCompletedEvent>((resolve, reject) => {
       const disposers: Array<() => void> = [];
+      let settled = false;
       const cleanup = (): void => {
         for (const d of disposers) d();
+        clearTimeout(timer);
       };
+      const settleResolve = (v: TurnCompletedEvent): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(v);
+      };
+      const settleReject = (err: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      };
+      const timer = setTimeout(() => {
+        settleReject(new Error(`compact timed out after ${this.compactTimeoutMs}ms`));
+      }, this.compactTimeoutMs);
+
+      disposers.push(this.onExit((err) => settleReject(err)));
 
       disposers.push(
         this.onNotification("item/completed", (params) => {
@@ -291,22 +396,19 @@ export class CodexAppServerClient {
         this.onNotification("turn/completed", (params) => {
           const p = params as TurnCompletedEvent;
           if (p.threadId !== threadId) return;
-          cleanup();
-          resolve(p);
+          settleResolve(p);
         })
       );
       disposers.push(
         this.onNotification("turn/failed", (params) => {
           const p = params as TurnFailedEvent;
           if (p.threadId !== threadId) return;
-          cleanup();
-          reject(new Error(`compact failed: ${p.error?.message ?? "unknown"}`));
+          settleReject(new Error(`compact failed: ${p.error?.message ?? "unknown"}`));
         })
       );
 
       this.request("thread/compact/start", { threadId }).catch((err) => {
-        cleanup();
-        reject(err);
+        settleReject(err);
       });
     });
   }

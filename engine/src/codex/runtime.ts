@@ -50,7 +50,7 @@ async function ensureThread(
   const existing = loadThreadId(paths);
   if (existing) {
     await client.resumeThread(existing, {
-      sandbox: "workspace-write",
+      sandbox: "danger-full-access",
       approvalPolicy: "never",
       skipGitRepoCheck: true,
     });
@@ -59,7 +59,7 @@ async function ensureThread(
   }
   const tid = await client.startThread({
     cwd: paths.agentDir,
-    sandbox: "workspace-write",
+    sandbox: "danger-full-access",
     approvalPolicy: "never",
     skipGitRepoCheck: true,
   });
@@ -154,10 +154,16 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => {
     log.info("SIGINT received");
     shuttingDown = true;
+    void client
+      .stop()
+      .catch((err) => log.warn(`app-server stop on SIGINT failed: ${(err as Error).message}`));
   });
   process.on("SIGTERM", () => {
     log.info("SIGTERM received");
     shuttingDown = true;
+    void client
+      .stop()
+      .catch((err) => log.warn(`app-server stop on SIGTERM failed: ${(err as Error).message}`));
   });
 
   writeInterval(paths, readInterval(paths, identity.runtime.default_interval_minutes));
@@ -210,6 +216,14 @@ async function main(): Promise<void> {
         const msg = (err as Error).message;
         log.error(`invoke error: ${msg}`);
         appendEvent(paths, "error", { phase: "invoke", message: msg });
+        try {
+          log.warn("restarting app-server after invoke error");
+          await client.restart();
+        } catch (restartErr) {
+          const restartMsg = (restartErr as Error).message;
+          log.error(`app-server restart error: ${restartMsg}`);
+          appendEvent(paths, "error", { phase: "restart", message: restartMsg });
+        }
       } finally {
         clearUnchangedPending(paths, decision.pendingSnapshot ?? {});
       }
@@ -224,7 +238,7 @@ async function main(): Promise<void> {
         compact_count_since_last: m ? m.compact.count_since_last : undefined,
         estimated_context_tokens: m ? m.tokens.estimated_context_tokens : undefined,
       });
-      firstHeartbeat = false;
+      firstHeartbeat = invokeOk ? false : loadThreadId(paths) === null;
 
       if (invokeOk && m && threadId && threshold > 0 && m.compact.count_since_last >= threshold) {
         log.info(
