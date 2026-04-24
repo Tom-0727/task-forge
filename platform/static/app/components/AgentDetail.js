@@ -1,12 +1,12 @@
 import { html } from '../../vendor/htm.mjs';
+import { useState } from '../../vendor/preact-hooks.mjs';
 import { useStore } from '../useStore.js';
 import { stateBadge, isStoppedLike } from '../util.js';
 import { goDashboard, refreshCurrent } from '../main.js';
 import * as api from '../api.js';
 
 import { StatusPanel } from './StatusPanel.js';
-import { SchedulePanel } from './SchedulePanel.js';
-import { ContactsPanel } from './ContactsPanel.js';
+import { ObservabilityPanel } from './ObservabilityPanel.js';
 import { HistoryPanel } from './HistoryPanel.js';
 import { SendPanel } from './SendPanel.js';
 
@@ -36,6 +36,7 @@ export function AgentDetail() {
   const name = useStore((s) => s.currentAgent);
   const detail = useStore((s) => s.detail);
   const error = useStore((s) => s.detailError);
+  const [goalOpen, setGoalOpen] = useState(false);
 
   if (!name) return null;
 
@@ -66,6 +67,7 @@ export function AgentDetail() {
   const status = detail.status || {};
   const badge = stateBadge(status);
   const stopped = isStoppedLike(badge);
+  const goal = (detail.goal || '').trim();
 
   return html`
     <div>
@@ -73,6 +75,12 @@ export function AgentDetail() {
         <button class="back-btn" onClick=${goDashboard}>← Back</button>
         <h1>${name}</h1>
         <span class=${`badge ${badge.cls}`}>${badge.text}</span>
+        ${goal ? html`
+          <div class=${goalOpen ? 'goal-chip-wrap open' : 'goal-chip-wrap'}>
+            <button class="goal-chip" onClick=${() => setGoalOpen(!goalOpen)}>Goal</button>
+            <div class="goal-popover">${goal}</div>
+          </div>
+        ` : null}
         <div style="flex:1"></div>
         ${stopped
           ? html`<button onClick=${() => handleStart(name)}>Start</button>`
@@ -82,7 +90,7 @@ export function AgentDetail() {
       </div>
 
       <${StatusPanel} detail=${detail} />
-      <${ContactsPanel} contacts=${detail.contacts || []} />
+      <${ObservabilityPanel} name=${name} />
       <${HistoryPanel} detail=${detail} />
       <${SendPanel} name=${name} />
     </div>

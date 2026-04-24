@@ -24,7 +24,6 @@ export interface RuntimeConfig {
   default_interval_minutes: number;
   default_max_turns: number;
   default_max_budget_usd: number;
-  default_compact_every_n_heartbeats: number;
 }
 
 export interface AgentIdentity {
@@ -45,7 +44,6 @@ export interface AgentPaths {
   stateFile: string;
   heartbeatFile: string;
   intervalFile: string;
-  compactIntervalFile: string;
   passiveModeFile: string;
   claudeSessionFile: string;
   codexThreadFile: string;

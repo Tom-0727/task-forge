@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   resolvePaths,
   loadIdentity,
@@ -9,19 +11,65 @@ import {
   writeHeartbeat,
   writeInterval,
   readInterval,
-  readCompactInterval,
   decidePreInvoke,
   clearUnchangedPending,
   hasAnyPending,
   sleepWithWakeup,
   appendEvent,
   recordHeartbeat,
-  recordCompactSuccess,
-  updateCompactThreshold,
+  syncCompactState,
+  utcnow,
   type AgentPaths,
+  type CompactObservation,
   type TurnTokens,
 } from "../harness-core/index.js";
 import { CodexAppServerClient } from "./app-server-client.js";
+
+function scanCodexCompactLog(threadId: string): CompactObservation {
+  const sessionsDir = path.join(os.homedir(), ".codex", "sessions");
+  if (!fs.existsSync(sessionsDir)) return { total: 0, lastAt: null };
+  const suffix = `-${threadId}.jsonl`;
+  const files: string[] = [];
+  for (const y of fs.readdirSync(sessionsDir)) {
+    const yd = path.join(sessionsDir, y);
+    if (!fs.statSync(yd).isDirectory()) continue;
+    for (const m of fs.readdirSync(yd)) {
+      const md = path.join(yd, m);
+      if (!fs.statSync(md).isDirectory()) continue;
+      for (const d of fs.readdirSync(md)) {
+        const dd = path.join(md, d);
+        if (!fs.statSync(dd).isDirectory()) continue;
+        for (const entry of fs.readdirSync(dd)) {
+          if (entry.startsWith("rollout-") && entry.endsWith(suffix)) {
+            files.push(path.join(dd, entry));
+          }
+        }
+      }
+    }
+  }
+  let total = 0;
+  let lastAt: string | null = null;
+  for (const f of files) {
+    const content = fs.readFileSync(f, "utf8");
+    for (const line of content.split("\n")) {
+      if (!line || line.indexOf('"context_compacted"') === -1) continue;
+      try {
+        const ev = JSON.parse(line) as {
+          type?: string;
+          timestamp?: string;
+          payload?: { type?: string };
+        };
+        if (ev.type === "event_msg" && ev.payload?.type === "context_compacted") {
+          total += 1;
+          if (typeof ev.timestamp === "string") lastAt = ev.timestamp;
+        }
+      } catch {
+        /* ignore malformed line */
+      }
+    }
+  }
+  return { total, lastAt };
+}
 
 function parseArgs(argv: string[]): { agentDir: string } {
   for (let i = 0; i < argv.length; i++) {
@@ -107,34 +155,18 @@ async function invokeAgent(
       },
     }
   );
-  const u = result.usage ?? {};
-  const inputT = u.input_tokens ?? 0;
+  const last = result.tokenUsage?.last;
+  const total = result.tokenUsage?.total;
   const tokens: TurnTokens = {
-    input_tokens: inputT,
-    output_tokens: u.output_tokens ?? 0,
-    cached_input_tokens: u.cached_input_tokens ?? 0,
-    estimated_context_tokens: inputT,
+    input_tokens: last?.inputTokens ?? 0,
+    output_tokens: last?.outputTokens ?? 0,
+    cached_input_tokens: last?.cachedInputTokens ?? 0,
+    estimated_context_tokens: total?.totalTokens ?? last?.totalTokens ?? 0,
   };
   log.info(
-    `heartbeat ok. tokens in=${inputT} out=${tokens.output_tokens} cached=${tokens.cached_input_tokens} ctx=${tokens.estimated_context_tokens}`
+    `heartbeat ok. tokens in=${tokens.input_tokens} out=${tokens.output_tokens} cached=${tokens.cached_input_tokens} ctx=${tokens.estimated_context_tokens}`
   );
   return tokens;
-}
-
-async function invokeCompact(
-  client: CodexAppServerClient,
-  threadId: string,
-  log: ReturnType<typeof createLogger>
-): Promise<boolean> {
-  let sawCompactionItem = false;
-  await client.compactThread(threadId, {
-    onItemCompleted: (n) => {
-      const item = n.item as { type?: string };
-      if (item.type === "contextCompaction") sawCompactionItem = true;
-    },
-  });
-  log.info(`compact ok (compactionItem=${sawCompactionItem})`);
-  return true;
 }
 
 async function main(): Promise<void> {
@@ -197,12 +229,6 @@ async function main(): Promise<void> {
         await client.start();
       }
 
-      const threshold = readCompactInterval(
-        paths,
-        identity.runtime.default_compact_every_n_heartbeats
-      );
-      updateCompactThreshold(paths, threshold);
-
       appendEvent(paths, "heartbeat_start", {});
       const startedAt = Date.now();
       let invokeOk = true;
@@ -228,9 +254,25 @@ async function main(): Promise<void> {
         clearUnchangedPending(paths, decision.pendingSnapshot ?? {});
       }
       const durationSeconds = (Date.now() - startedAt) / 1000;
-      const m = invokeOk
-        ? recordHeartbeat(paths, { durationSeconds, tokens, compactThreshold: threshold })
+      const heartbeatTs = utcnow();
+      let m = invokeOk
+        ? recordHeartbeat(paths, { durationSeconds, tokens })
         : null;
+      if (invokeOk && m && threadId) {
+        const obs = scanCodexCompactLog(threadId);
+        const synced = syncCompactState(paths, { ...obs, currentHeartbeatTs: heartbeatTs });
+        if (synced.compact.total_compacts !== m.compact.total_compacts) {
+          appendEvent(paths, "compact_synced", {
+            total_compacts: synced.compact.total_compacts,
+            last_compact_at: synced.compact.last_compact_at,
+            delta: synced.compact.total_compacts - m.compact.total_compacts,
+          });
+          log.info(
+            `compact log sync: total=${synced.compact.total_compacts} (+${synced.compact.total_compacts - m.compact.total_compacts})`
+          );
+        }
+        m = synced;
+      }
       appendEvent(paths, "heartbeat_end", {
         duration_seconds: durationSeconds,
         ok: invokeOk,
@@ -239,33 +281,6 @@ async function main(): Promise<void> {
         estimated_context_tokens: m ? m.tokens.estimated_context_tokens : undefined,
       });
       firstHeartbeat = invokeOk ? false : loadThreadId(paths) === null;
-
-      if (invokeOk && m && threadId && threshold > 0 && m.compact.count_since_last >= threshold) {
-        log.info(
-          `compact threshold reached (${m.compact.count_since_last}/${threshold}); compacting`
-        );
-        appendEvent(paths, "compact_start", {
-          count_since_last: m.compact.count_since_last,
-          threshold,
-        });
-        try {
-          const ok = await invokeCompact(client, threadId, log);
-          if (ok) {
-            const post = recordCompactSuccess(paths);
-            appendEvent(paths, "compact_end", {
-              ok: true,
-              total_compacts: post.compact.total_compacts,
-              avg_heartbeats_between: post.compact.avg_heartbeats_between,
-            });
-          } else {
-            appendEvent(paths, "compact_end", { ok: false });
-          }
-        } catch (err) {
-          const msg = (err as Error).message;
-          log.error(`compact error: ${msg}`);
-          appendEvent(paths, "error", { phase: "compact", message: msg });
-        }
-      }
 
       if (hasAnyPending(paths)) {
         log.info("more pending messages; continuing immediately");

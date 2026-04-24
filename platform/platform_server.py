@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import secrets
 import signal
 import subprocess
@@ -216,6 +217,13 @@ def _tail_file(path: Path, limit: int) -> str:
         return ""
 
 
+def _format_mtime(path: Path) -> str:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except OSError:
+        return ""
+
+
 def _resolve_agent(name: str):
     """Return (agent_info, workdir_path) or (None, None)."""
     info = get_agent(name)
@@ -225,6 +233,243 @@ def _resolve_agent(name: str):
     if not workdir.exists():
         return info, None
     return info, workdir
+
+
+def _default_metrics() -> dict:
+    return {
+        "schema_version": 1,
+        "heartbeat": {
+            "count": 0,
+            "last_duration_seconds": 0,
+            "avg_duration_seconds": 0,
+            "total_duration_seconds": 0,
+        },
+        "compact": {
+            "count_since_last": 0,
+            "total_compacts": 0,
+            "total_heartbeats_between_compacts": 0,
+            "avg_heartbeats_between": 0,
+            "last_compact_at": None,
+        },
+        "tokens": {
+            "last_turn": {},
+            "estimated_context_tokens": 0,
+            "lifetime": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cached_input_tokens": 0,
+            },
+        },
+        "last_updated": None,
+    }
+
+
+def _read_agent_metrics(workdir: Path) -> dict:
+    metrics_path = workdir / "Runtime" / "metrics.json"
+    base = _default_metrics()
+    if not metrics_path.exists():
+        return base
+    try:
+        raw = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return base
+    if not isinstance(raw, dict):
+        return base
+
+    heartbeat = raw.get("heartbeat") if isinstance(raw.get("heartbeat"), dict) else {}
+    compact = raw.get("compact") if isinstance(raw.get("compact"), dict) else {}
+    tokens = raw.get("tokens") if isinstance(raw.get("tokens"), dict) else {}
+    lifetime = tokens.get("lifetime") if isinstance(tokens.get("lifetime"), dict) else {}
+    last_turn = tokens.get("last_turn") if isinstance(tokens.get("last_turn"), dict) else {}
+
+    return {
+        "schema_version": raw.get("schema_version", 1),
+        "heartbeat": {**base["heartbeat"], **heartbeat},
+        "compact": {**base["compact"], **compact},
+        "tokens": {
+            "last_turn": last_turn,
+            "estimated_context_tokens": tokens.get("estimated_context_tokens", 0),
+            "lifetime": {**base["tokens"]["lifetime"], **lifetime},
+        },
+        "last_updated": raw.get("last_updated"),
+    }
+
+
+def _parse_frontmatter(path: Path) -> dict:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---", 4)
+    if end < 0:
+        return {}
+
+    data: dict[str, str] = {}
+    for raw_line in text[4:end].splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and (
+            (value[0] == value[-1] == "'") or (value[0] == value[-1] == '"')
+        ):
+            value = value[1:-1]
+        if key:
+            data[key] = value
+    return data
+
+
+def _memory_kind_root(workdir: Path, kind: str) -> Path | None:
+    if kind == "knowledge":
+        return workdir / "Memory" / "knowledge"
+    if kind == "episodes":
+        return workdir / "Memory" / "episodes"
+    return None
+
+
+_EPISODE_TS_RE = re.compile(r"^ep--(\d{8}T\d{6}Z)--")
+_MEMORY_HOUSEKEEPING_FILES = {"README.md", "AGENTS.md", "CLAUDE.md"}
+
+
+def _is_memory_content_file(rel: Path) -> bool:
+    if any(part.startswith(".") for part in rel.parts):
+        return False
+    return rel.name not in _MEMORY_HOUSEKEEPING_FILES
+
+
+def _path_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _episode_sort_and_date(path: Path) -> tuple[float, str, str]:
+    match = _EPISODE_TS_RE.match(path.name)
+    if match:
+        stamp = match.group(1)
+        try:
+            dt = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+            return dt.timestamp(), dt.strftime("%Y-%m-%d"), dt.strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            pass
+    mtime = _path_mtime(path)
+    if not mtime:
+        return 0.0, "unknown", ""
+    dt = datetime.fromtimestamp(mtime, timezone.utc)
+    return mtime, dt.strftime("%Y-%m-%d"), dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _memory_index(workdir: Path, kind: str, limit: int, cursor: int, date_filter: str = "") -> dict:
+    root = _memory_kind_root(workdir, kind)
+    if root is None:
+        return {"error": "kind must be knowledge or episodes"}
+    limit = max(1, min(limit, 100))
+    cursor = max(0, cursor)
+    if not root.exists():
+        out: dict = {"items": [], "next_cursor": None}
+        if kind == "episodes":
+            out["dates"] = []
+        return out
+
+    entries: list[tuple[Path, float, str, str]] = []
+    date_counts: dict[str, int] = {}
+    root_resolved = root.resolve()
+    try:
+        for path in root.rglob("*.md"):
+            try:
+                rel = path.relative_to(root)
+                path.resolve().relative_to(root_resolved)
+            except ValueError:
+                continue
+            if not _is_memory_content_file(rel):
+                continue
+            if kind == "episodes":
+                sort_key, episode_date, occurred_at = _episode_sort_and_date(path)
+                date_counts[episode_date] = date_counts.get(episode_date, 0) + 1
+                if date_filter and episode_date != date_filter:
+                    continue
+                entries.append((path, sort_key, episode_date, occurred_at))
+            else:
+                entries.append((path, _path_mtime(path), "", ""))
+    except OSError:
+        out = {"items": [], "next_cursor": None}
+        if kind == "episodes":
+            out["dates"] = []
+        return out
+
+    if kind == "episodes" and not date_filter:
+        return {
+            "items": [],
+            "next_cursor": None,
+            "dates": [
+                {"date": date, "count": count}
+                for date, count in sorted(date_counts.items(), reverse=True)
+            ],
+            "date": "",
+        }
+
+    entries.sort(key=lambda item: item[1], reverse=True)
+    page = entries[cursor:cursor + limit]
+    items = []
+    for path, _, episode_date, occurred_at in page:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        fm = _parse_frontmatter(path)
+        rel_path = path.relative_to(workdir).as_posix()
+        item = {
+            "path": rel_path,
+            "name": path.name,
+            "last_modified": _format_mtime(path),
+            "size": stat.st_size,
+            "status": fm.get("status", ""),
+            "last_edited_at": fm.get("last_edited_at", ""),
+        }
+        if kind == "knowledge":
+            item["summary"] = fm.get("summary", "")
+        else:
+            item["title"] = fm.get("title", "")
+            item["objective"] = fm.get("objective", "")
+            item["date"] = episode_date
+            item["occurred_at"] = occurred_at
+        items.append(item)
+
+    next_cursor = cursor + limit if cursor + limit < len(entries) else None
+    out = {"items": items, "next_cursor": next_cursor}
+    if kind == "episodes":
+        out["dates"] = [
+            {"date": date, "count": count}
+            for date, count in sorted(date_counts.items(), reverse=True)
+        ]
+        out["date"] = date_filter
+    return out
+
+
+def _resolve_memory_markdown(workdir: Path, raw_path: str) -> Path | None:
+    if not raw_path:
+        return None
+    rel = Path(raw_path)
+    if rel.is_absolute() or not rel.parts or rel.parts[0] != "Memory":
+        return None
+    if any(part.startswith(".") for part in rel.parts):
+        return None
+    memory_root = (workdir / "Memory").resolve()
+    target = (workdir / rel).resolve()
+    try:
+        target.relative_to(memory_root)
+    except ValueError:
+        return None
+    if target.suffix.lower() != ".md":
+        return None
+    return target
 
 
 # ── Aggregate helpers ────────────────────────────────────────────────────
@@ -466,6 +711,12 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+@app.route("/agents/<path:name>")
+@app.route("/agents/<path:name>/memory")
+def app_route(name: str):
+    return send_from_directory(app.static_folder, "index.html")
+
+
 # ── API: Agent list ───────────────────────────────────────────────────────
 
 @app.route("/api/agents")
@@ -490,6 +741,69 @@ def api_agent_status(name: str):
         return jsonify({"error": "workdir not found"}), 404
     status = read_agent_status(str(workdir))
     return jsonify({**info, "status": status})
+
+
+# ── API: Agent metrics ──────────────────────────────────────────────────
+
+@app.route("/api/agents/<name>/metrics")
+def api_agent_metrics(name: str):
+    info, workdir = _resolve_agent(name)
+    if not info:
+        return jsonify({"error": "agent not found"}), 404
+    if not workdir:
+        return jsonify({"error": "workdir not found"}), 404
+    return jsonify(_read_agent_metrics(workdir))
+
+
+# ── API: Agent memory ───────────────────────────────────────────────────
+
+@app.route("/api/agents/<name>/memory/index")
+def api_agent_memory_index(name: str):
+    info, workdir = _resolve_agent(name)
+    if not info:
+        return jsonify({"error": "agent not found"}), 404
+    if not workdir:
+        return jsonify({"error": "workdir not found"}), 404
+
+    kind = request.args.get("kind", "knowledge", type=str)
+    limit = request.args.get("limit", 20, type=int)
+    date_filter = request.args.get("date", "", type=str)
+    cursor_arg = request.args.get("cursor", "0", type=str)
+    try:
+        cursor = int(cursor_arg or "0")
+    except ValueError:
+        cursor = 0
+
+    result = _memory_index(workdir, kind, limit, cursor, date_filter)
+    if "error" in result:
+        return jsonify(result), 400
+    return jsonify(result)
+
+
+@app.route("/api/agents/<name>/memory/file")
+def api_agent_memory_file(name: str):
+    info, workdir = _resolve_agent(name)
+    if not info:
+        return jsonify({"error": "agent not found"}), 404
+    if not workdir:
+        return jsonify({"error": "workdir not found"}), 404
+
+    raw_path = request.args.get("path", "", type=str)
+    target = _resolve_memory_markdown(workdir, raw_path)
+    if target is None:
+        return jsonify({"error": "path must be a markdown file under Memory/"}), 400
+    if not target.exists() or not target.is_file():
+        return jsonify({"error": "file not found"}), 404
+
+    try:
+        content = target.read_text(encoding="utf-8")
+    except OSError:
+        return jsonify({"error": "failed to read file"}), 500
+    return jsonify({
+        "path": target.relative_to(workdir).as_posix(),
+        "content": content,
+        "last_modified": _format_mtime(target),
+    })
 
 
 # ── API: Mailbox history ─────────────────────────────────────────────────
@@ -573,63 +887,6 @@ def api_agent_interval(name: str):
     update_agent(name, {"interval": interval})
 
     return jsonify({"ok": True, "interval": interval})
-
-
-# ── API: Compact interval ────────────────────────────────────────────
-
-@app.route("/api/agents/<name>/compact-interval", methods=["GET"])
-def api_agent_compact_interval_get(name: str):
-    info, workdir = _resolve_agent(name)
-    if not info:
-        return jsonify({"error": "agent not found"}), 404
-    if not workdir:
-        return jsonify({"error": "workdir not found"}), 404
-
-    override_file = workdir / "Runtime" / "compact_interval"
-    identity_file = workdir / "Runtime" / "agent.json"
-
-    default = 0
-    if identity_file.exists():
-        try:
-            ident = json.loads(identity_file.read_text(encoding="utf-8"))
-            default = int(ident.get("runtime", {}).get("default_compact_every_n_heartbeats", 0))
-        except (json.JSONDecodeError, OSError, TypeError, ValueError):
-            default = 0
-
-    override: int | None = None
-    if override_file.exists():
-        try:
-            override = int(override_file.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            override = None
-
-    effective = override if override is not None else default
-    return jsonify({"default": default, "override": override, "effective": effective})
-
-
-@app.route("/api/agents/<name>/compact-interval", methods=["POST"])
-def api_agent_compact_interval_set(name: str):
-    info, workdir = _resolve_agent(name)
-    if not info:
-        return jsonify({"error": "agent not found"}), 404
-    if not workdir:
-        return jsonify({"error": "workdir not found"}), 404
-
-    body = request.get_json(silent=True) or {}
-    value = body.get("interval")
-    if value is None:
-        # clear override — revert to identity default
-        override_file = workdir / "Runtime" / "compact_interval"
-        override_file.unlink(missing_ok=True)
-        return jsonify({"ok": True, "override": None})
-
-    if not isinstance(value, int) or value < 0:
-        return jsonify({"error": "interval must be a non-negative integer (0 disables)"}), 400
-
-    runtime_dir = workdir / "Runtime"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    (runtime_dir / "compact_interval").write_text(str(value))
-    return jsonify({"ok": True, "override": value})
 
 
 # ── API: Passive mode ───────────────────────────────────────────────

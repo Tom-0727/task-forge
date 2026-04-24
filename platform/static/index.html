@@ -46,6 +46,7 @@
       padding: 28px 16px 40px;
       min-width: 0;
     }
+    .app-wide { max-width: 1380px; }
     .top {
       display: flex;
       align-items: flex-end;
@@ -317,6 +318,41 @@
       padding: 6px 12px;
       font-size: 13px;
     }
+    .goal-chip-wrap {
+      position: relative;
+      display: inline-flex;
+      flex-shrink: 0;
+    }
+    .goal-chip {
+      background: var(--off-bg);
+      color: var(--ink);
+      padding: 5px 10px;
+      font-size: 12px;
+      border-radius: 999px;
+    }
+    .goal-popover {
+      display: none;
+      position: absolute;
+      z-index: 20;
+      top: calc(100% + 8px);
+      left: 0;
+      width: min(520px, 80vw);
+      max-height: 280px;
+      overflow: auto;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 12px 36px rgba(31, 40, 49, 0.18);
+      font-size: 13px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .goal-chip-wrap:hover .goal-popover,
+    .goal-chip-wrap.open .goal-popover {
+      display: block;
+    }
     .detail-status-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -334,6 +370,41 @@
       font-size: 13px;
     }
     .detail-fact strong { font-weight: 700; }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .metric-card {
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.58);
+      min-width: 0;
+    }
+    .metric-card h3 {
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    .metric-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 5px 0;
+      border-top: 1px solid rgba(31, 40, 49, 0.08);
+      font-size: 12px;
+      min-width: 0;
+    }
+    .metric-row span {
+      color: var(--muted);
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .metric-row strong {
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
     .history {
       max-height: 50vh;
       overflow: auto;
@@ -357,6 +428,138 @@
     }
     .bubble.human { background: var(--human-bg); }
     .bubble.agent { background: var(--agent-bg); }
+    .memory-date-filter {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+      gap: 6px;
+      max-height: 156px;
+      overflow: auto;
+      padding: 8px 0;
+      margin-bottom: 8px;
+      border-bottom: 1px dashed var(--line);
+    }
+    .date-chip {
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: var(--off-bg);
+      color: var(--ink);
+      font-size: 11px;
+    }
+    .date-chip.active {
+      background: var(--accent);
+      color: #fff;
+    }
+    .memory-layout {
+      display: grid;
+      grid-template-columns: minmax(300px, 36%) minmax(0, 1fr);
+      gap: 12px;
+      min-height: 70vh;
+    }
+    .memory-entry-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .status-head-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .memory-list {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.5);
+      overflow: auto;
+      max-height: 72vh;
+      padding: 6px;
+      min-width: 0;
+    }
+    .memory-date-separator {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 5px 7px;
+      margin: 2px 0 5px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.92);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+    .memory-item {
+      width: 100%;
+      display: grid;
+      gap: 3px;
+      text-align: left;
+      padding: 8px;
+      margin-bottom: 5px;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--ink);
+      font-weight: 500;
+    }
+    .memory-item:hover,
+    .memory-item.active {
+      background: var(--off-bg);
+      filter: none;
+    }
+    .memory-item-title {
+      font-size: 13px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .memory-item-path,
+    .memory-item-meta {
+      color: var(--muted);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+    .memory-content {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.68);
+      min-width: 0;
+      max-height: 72vh;
+      overflow: auto;
+    }
+    .memory-file-head {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.94);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .memory-markdown {
+      margin: 0;
+      padding: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .memory-empty {
+      padding: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .memory-load-more {
+      width: 100%;
+      background: var(--off-bg);
+      color: var(--ink);
+      padding: 7px 10px;
+      font-size: 12px;
+      border-radius: 7px;
+    }
     textarea {
       width: 100%;
       min-height: 100px;
@@ -457,6 +660,10 @@
       .top-actions .meta { width: 100%; }
       .agents-grid { grid-template-columns: 1fr; }
       .detail-status-grid { grid-template-columns: 1fr; }
+      .metric-grid { grid-template-columns: 1fr; }
+      .memory-layout { grid-template-columns: 1fr; }
+      .memory-list,
+      .memory-content { max-height: 45vh; }
       .detail-header {
         align-items: flex-start;
         flex-wrap: wrap;

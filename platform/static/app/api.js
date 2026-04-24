@@ -25,6 +25,23 @@ export function getAgentDetail(name, { contact = 'human', limit = 50 } = {}) {
   return jsonRequest(`/api/agents/${encodeURIComponent(name)}/detail?${qs}`);
 }
 
+export function getAgentMetrics(name) {
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/metrics`);
+}
+
+export function getAgentMemoryIndex(name, { kind = 'knowledge', limit = 20, cursor = '', date = '' } = {}) {
+  const params = { kind, limit: String(limit) };
+  if (cursor !== '' && cursor !== null && cursor !== undefined) params.cursor = String(cursor);
+  if (date) params.date = date;
+  const qs = new URLSearchParams(params);
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/memory/index?${qs}`);
+}
+
+export function getAgentMemoryFile(name, path) {
+  const qs = new URLSearchParams({ path });
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/memory/file?${qs}`);
+}
+
 export function startAgent(name) {
   return jsonRequest(`/api/agents/${encodeURIComponent(name)}/start`, { method: 'POST' });
 }
@@ -58,18 +75,6 @@ export function setPassiveMode(name, enabled) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
-  });
-}
-
-export function getCompactInterval(name) {
-  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/compact-interval`);
-}
-
-export function setCompactInterval(name, interval) {
-  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/compact-interval`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ interval }),
   });
 }
 

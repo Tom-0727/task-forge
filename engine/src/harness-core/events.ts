@@ -10,8 +10,7 @@ export type EventKind =
   | "tool_result"
   | "command_execution"
   | "file_change"
-  | "compact_start"
-  | "compact_end"
+  | "compact_synced"
   | "error";
 
 export interface EventRecord {

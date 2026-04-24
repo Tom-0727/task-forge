@@ -219,7 +219,6 @@ def write_agent_json(workdir: Path, ident: dict, engine_version: str) -> Path:
             "default_interval_minutes": ident["interval"],
             "default_max_turns": 400,
             "default_max_budget_usd": 5.0,
-            "default_compact_every_n_heartbeats": 0,
         },
     }
     path = runtime / "agent.json"
@@ -414,13 +413,16 @@ def main() -> int:
     else:
         existing = json.loads(agent_json.read_text(encoding="utf-8"))
         runtime_cfg = existing.setdefault("runtime", {})
-        if "default_compact_every_n_heartbeats" not in runtime_cfg:
-            runtime_cfg["default_compact_every_n_heartbeats"] = 0
+        if runtime_cfg.pop("default_compact_every_n_heartbeats", None) is not None:
             agent_json.write_text(
                 json.dumps(existing, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
-            print("[migrate] upgraded Runtime/agent.json runtime.default_compact_every_n_heartbeats")
+            print("[migrate] dropped Runtime/agent.json runtime.default_compact_every_n_heartbeats")
+        compact_interval_file = workdir / "Runtime" / "compact_interval"
+        if compact_interval_file.exists():
+            compact_interval_file.unlink()
+            print("[migrate] removed Runtime/compact_interval")
     rendered = render_subagents(workdir, engine_root, ident)
     print(f"[migrate] rendered {len(rendered)} subagent files")
 

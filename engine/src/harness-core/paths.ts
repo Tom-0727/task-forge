@@ -15,7 +15,6 @@ export function resolvePaths(agentDir: string): AgentPaths {
     stateFile: path.join(runtimeDir, "state"),
     heartbeatFile: path.join(runtimeDir, "last_heartbeat"),
     intervalFile: path.join(runtimeDir, "interval"),
-    compactIntervalFile: path.join(runtimeDir, "compact_interval"),
     passiveModeFile: path.join(runtimeDir, "passive_mode"),
     claudeSessionFile: path.join(runtimeDir, "claude_session_id"),
     codexThreadFile: path.join(runtimeDir, "codex_thread_id"),

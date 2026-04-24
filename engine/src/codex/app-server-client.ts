@@ -22,14 +22,24 @@ export interface ItemCompletedNotification {
   item: Record<string, unknown>;
 }
 
+export interface TokenUsageBreakdown {
+  totalTokens: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+}
+
+export interface ThreadTokenUsage {
+  total: TokenUsageBreakdown;
+  last: TokenUsageBreakdown;
+  modelContextWindow: number | null;
+}
+
 export interface TurnCompletedEvent {
   threadId: string;
   turnId: string;
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    cached_input_tokens?: number;
-  };
+  tokenUsage?: ThreadTokenUsage;
 }
 
 export interface TurnFailedEvent {
@@ -42,10 +52,6 @@ export interface TurnHandlers {
   onItemCompleted?: (n: ItemCompletedNotification) => void;
   onAgentMessageDelta?: (threadId: string, text: string) => void;
   onCommandOutputDelta?: (threadId: string, data: string) => void;
-}
-
-export interface CompactHandlers {
-  onItemCompleted?: (n: ItemCompletedNotification) => void;
 }
 
 interface Pending {
@@ -62,7 +68,6 @@ export interface AppServerLogger {
 
 const DEFAULT_RPC_TIMEOUT_MS = 60_000;
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60_000;
-const DEFAULT_COMPACT_TIMEOUT_MS = 10 * 60_000;
 const DEFAULT_STOP_TIMEOUT_MS = 10_000;
 
 function envMs(name: string, fallback: number): number {
@@ -88,7 +93,6 @@ export class CodexAppServerClient {
   private exitHandlers = new Set<(err: Error) => void>();
   private rpcTimeoutMs = envMs("HARNESS_CODEX_RPC_TIMEOUT_MS", DEFAULT_RPC_TIMEOUT_MS);
   private turnTimeoutMs = envMs("HARNESS_CODEX_TURN_TIMEOUT_MS", DEFAULT_TURN_TIMEOUT_MS);
-  private compactTimeoutMs = envMs("HARNESS_CODEX_COMPACT_TIMEOUT_MS", DEFAULT_COMPACT_TIMEOUT_MS);
   private stopTimeoutMs = envMs("HARNESS_CODEX_STOP_TIMEOUT_MS", DEFAULT_STOP_TIMEOUT_MS);
 
   constructor(log: AppServerLogger, clientInfo?: Partial<{ name: string; title: string; version: string }>) {
@@ -292,6 +296,7 @@ export class CodexAppServerClient {
     return new Promise<TurnCompletedEvent>((resolve, reject) => {
       const disposers: Array<() => void> = [];
       let settled = false;
+      let latestTokenUsage: ThreadTokenUsage | undefined;
       const cleanup = (): void => {
         for (const d of disposers) d();
         clearTimeout(timer);
@@ -336,10 +341,21 @@ export class CodexAppServerClient {
         })
       );
       disposers.push(
+        this.onNotification("thread/tokenUsage/updated", (params) => {
+          const p = params as { threadId?: string; tokenUsage?: ThreadTokenUsage };
+          if (p.threadId !== opts.threadId || !p.tokenUsage) return;
+          latestTokenUsage = p.tokenUsage;
+        })
+      );
+      disposers.push(
         this.onNotification("turn/completed", (params) => {
-          const p = params as TurnCompletedEvent;
+          const p = params as { threadId?: string; turn?: { id?: string } };
           if (p.threadId !== opts.threadId) return;
-          settleResolve(p);
+          settleResolve({
+            threadId: opts.threadId,
+            turnId: p.turn?.id ?? "",
+            tokenUsage: latestTokenUsage,
+          });
         })
       );
       disposers.push(
@@ -354,60 +370,6 @@ export class CodexAppServerClient {
         threadId: opts.threadId,
         input: [{ type: "text", text: opts.text }],
       }).catch((err) => {
-        settleReject(err);
-      });
-    });
-  }
-
-  async compactThread(threadId: string, handlers: CompactHandlers = {}): Promise<TurnCompletedEvent> {
-    return new Promise<TurnCompletedEvent>((resolve, reject) => {
-      const disposers: Array<() => void> = [];
-      let settled = false;
-      const cleanup = (): void => {
-        for (const d of disposers) d();
-        clearTimeout(timer);
-      };
-      const settleResolve = (v: TurnCompletedEvent): void => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve(v);
-      };
-      const settleReject = (err: Error): void => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(err);
-      };
-      const timer = setTimeout(() => {
-        settleReject(new Error(`compact timed out after ${this.compactTimeoutMs}ms`));
-      }, this.compactTimeoutMs);
-
-      disposers.push(this.onExit((err) => settleReject(err)));
-
-      disposers.push(
-        this.onNotification("item/completed", (params) => {
-          const p = params as ItemCompletedNotification;
-          if (p.threadId !== threadId) return;
-          handlers.onItemCompleted?.(p);
-        })
-      );
-      disposers.push(
-        this.onNotification("turn/completed", (params) => {
-          const p = params as TurnCompletedEvent;
-          if (p.threadId !== threadId) return;
-          settleResolve(p);
-        })
-      );
-      disposers.push(
-        this.onNotification("turn/failed", (params) => {
-          const p = params as TurnFailedEvent;
-          if (p.threadId !== threadId) return;
-          settleReject(new Error(`compact failed: ${p.error?.message ?? "unknown"}`));
-        })
-      );
-
-      this.request("thread/compact/start", { threadId }).catch((err) => {
         settleReject(err);
       });
     });

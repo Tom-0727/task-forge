@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import {
@@ -11,20 +12,54 @@ import {
   writeHeartbeat,
   writeInterval,
   readInterval,
-  readCompactInterval,
   decidePreInvoke,
   clearUnchangedPending,
   hasAnyPending,
   sleepWithWakeup,
   appendEvent,
   recordHeartbeat,
-  recordCompactSuccess,
-  updateCompactThreshold,
+  syncCompactState,
+  utcnow,
   type AgentIdentity,
   type AgentPaths,
+  type CompactObservation,
   type TurnTokens,
 } from "../harness-core/index.js";
 import { query, type Options as ClaudeAgentOptions, type AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
+
+function scanClaudeCompactLog(sessionId: string): CompactObservation {
+  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  if (!fs.existsSync(projectsDir)) return { total: 0, lastAt: null };
+  let file: string | null = null;
+  for (const proj of fs.readdirSync(projectsDir)) {
+    const candidate = path.join(projectsDir, proj, `${sessionId}.jsonl`);
+    if (fs.existsSync(candidate)) {
+      file = candidate;
+      break;
+    }
+  }
+  if (!file) return { total: 0, lastAt: null };
+  let total = 0;
+  let lastAt: string | null = null;
+  const content = fs.readFileSync(file, "utf8");
+  for (const line of content.split("\n")) {
+    if (!line || line.indexOf('"compact_boundary"') === -1) continue;
+    try {
+      const ev = JSON.parse(line) as {
+        type?: string;
+        subtype?: string;
+        timestamp?: string;
+      };
+      if (ev.type === "system" && ev.subtype === "compact_boundary") {
+        total += 1;
+        if (typeof ev.timestamp === "string") lastAt = ev.timestamp;
+      }
+    } catch {
+      /* ignore malformed line */
+    }
+  }
+  return { total, lastAt };
+}
 
 function parseArgs(argv: string[]): { agentDir: string } {
   for (let i = 0; i < argv.length; i++) {
@@ -206,56 +241,6 @@ async function invokeAgent(
   return tokens;
 }
 
-async function invokeCompact(
-  paths: AgentPaths,
-  log: ReturnType<typeof createLogger>
-): Promise<boolean> {
-  const sessionId = loadSessionId(paths);
-  if (!sessionId) {
-    log.info("compact skipped: no session yet");
-    return false;
-  }
-
-  const claudeBin = resolveClaudeExecutable();
-  const options: ClaudeAgentOptions = {
-    cwd: paths.agentDir,
-    allowedTools: [],
-    maxTurns: 1,
-    permissionMode: "bypassPermissions",
-    ...(claudeBin ? { pathToClaudeCodeExecutable: claudeBin } : {}),
-    resume: sessionId,
-    includePartialMessages: false,
-  };
-
-  log.info(`compact: resuming session ${sessionId}`);
-
-  let boundarySeen = false;
-  let newSessionId: string | null = null;
-  let ended: "success" | "error" | null = null;
-
-  for await (const message of query({ prompt: "/compact", options })) {
-    const kind = (message as { type?: string }).type;
-    const subtype = (message as { subtype?: string }).subtype;
-
-    if (kind === "system" && subtype === "compact_boundary") {
-      boundarySeen = true;
-      log.info("compact: boundary reached");
-    } else if (kind === "result") {
-      const r = message as { session_id?: string; subtype?: string };
-      if (r.session_id) newSessionId = r.session_id;
-      ended = r.subtype === "success" ? "success" : "error";
-    }
-  }
-
-  if (newSessionId) saveSessionId(paths, newSessionId);
-  if (boundarySeen && ended === "success") {
-    log.info("compact ok");
-    return true;
-  }
-  log.warn(`compact failed: boundary=${boundarySeen} ended=${ended ?? "none"}`);
-  return false;
-}
-
 async function main(): Promise<void> {
   const { agentDir } = parseArgs(process.argv.slice(2));
   const paths = resolvePaths(agentDir);
@@ -297,12 +282,6 @@ async function main(): Promise<void> {
         continue;
       }
 
-      const threshold = readCompactInterval(
-        paths,
-        identity.runtime.default_compact_every_n_heartbeats
-      );
-      updateCompactThreshold(paths, threshold);
-
       appendEvent(paths, "heartbeat_start", {});
       const startedAt = Date.now();
       let invokeOk = true;
@@ -318,9 +297,28 @@ async function main(): Promise<void> {
         clearUnchangedPending(paths, decision.pendingSnapshot ?? {});
       }
       const durationSeconds = (Date.now() - startedAt) / 1000;
-      const m = invokeOk
-        ? recordHeartbeat(paths, { durationSeconds, tokens, compactThreshold: threshold })
+      const heartbeatTs = utcnow();
+      let m = invokeOk
+        ? recordHeartbeat(paths, { durationSeconds, tokens })
         : null;
+      if (invokeOk && m) {
+        const sid = loadSessionId(paths);
+        if (sid) {
+          const obs = scanClaudeCompactLog(sid);
+          const synced = syncCompactState(paths, { ...obs, currentHeartbeatTs: heartbeatTs });
+          if (synced.compact.total_compacts !== m.compact.total_compacts) {
+            appendEvent(paths, "compact_synced", {
+              total_compacts: synced.compact.total_compacts,
+              last_compact_at: synced.compact.last_compact_at,
+              delta: synced.compact.total_compacts - m.compact.total_compacts,
+            });
+            log.info(
+              `compact log sync: total=${synced.compact.total_compacts} (+${synced.compact.total_compacts - m.compact.total_compacts})`
+            );
+          }
+          m = synced;
+        }
+      }
       appendEvent(paths, "heartbeat_end", {
         duration_seconds: durationSeconds,
         ok: invokeOk,
@@ -329,33 +327,6 @@ async function main(): Promise<void> {
         estimated_context_tokens: m ? m.tokens.estimated_context_tokens : undefined,
       });
       firstHeartbeat = false;
-
-      if (invokeOk && m && threshold > 0 && m.compact.count_since_last >= threshold) {
-        log.info(
-          `compact threshold reached (${m.compact.count_since_last}/${threshold}); compacting`
-        );
-        appendEvent(paths, "compact_start", {
-          count_since_last: m.compact.count_since_last,
-          threshold,
-        });
-        try {
-          const ok = await invokeCompact(paths, log);
-          if (ok) {
-            const post = recordCompactSuccess(paths);
-            appendEvent(paths, "compact_end", {
-              ok: true,
-              total_compacts: post.compact.total_compacts,
-              avg_heartbeats_between: post.compact.avg_heartbeats_between,
-            });
-          } else {
-            appendEvent(paths, "compact_end", { ok: false });
-          }
-        } catch (err) {
-          const msg = (err as Error).message;
-          log.error(`compact error: ${msg}`);
-          appendEvent(paths, "error", { phase: "compact", message: msg });
-        }
-      }
 
       if (hasAnyPending(paths)) {
         log.info("more pending messages; continuing immediately");

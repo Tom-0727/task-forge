@@ -31,19 +31,3 @@ export function writeInterval(paths: AgentPaths, minutes: number): void {
 export function isPassiveMode(paths: AgentPaths): boolean {
   return fs.existsSync(paths.passiveModeFile);
 }
-
-export function readCompactInterval(paths: AgentPaths, fallback: number): number {
-  try {
-    const raw = fs.readFileSync(paths.compactIntervalFile, "utf8").trim();
-    const n = parseInt(raw, 10);
-    if (Number.isFinite(n) && n >= 0) return n;
-  } catch {
-    /* fall through */
-  }
-  return fallback;
-}
-
-export function writeCompactInterval(paths: AgentPaths, n: number): void {
-  fs.mkdirSync(paths.runtimeDir, { recursive: true });
-  fs.writeFileSync(paths.compactIntervalFile, String(n), "utf8");
-}
