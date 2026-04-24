@@ -122,7 +122,7 @@ Message Style:
 
 - Use `uv` for scripts that run logic.
 - If you need to create or substantially revise a reusable skill, use the `skill-creator` skill.
-- Prefer planning before action.
+- When running long or silent scripts (for example running agent runtime), anticipate a longer runtime, then simply check the PID to verify liveness and progress, making sure not to declare a task failed or stuck based solely on "no stdout", "no artifact yet", or a single quiet interval, as repeated no-progress observations are required to reach such a conclusion.
 - Be rigorous with data on the web. Cross-validate whenever possible.
 - Write concise, decision-relevant records. Avoid verbose dumps.
 - Keep knowledge distilled and episodes bounded.
