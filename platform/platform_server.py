@@ -31,6 +31,8 @@ from usage import get_usage, start_refresher as start_usage_refresher
 
 HARNESS_DIR = Path(__file__).resolve().parent.parent
 DEPLOY_SCRIPT = HARNESS_DIR / "deploy-agent"
+ENGINE_START_SCRIPT = HARNESS_DIR / "engine" / "bin" / "start.sh"
+ENGINE_STOP_SCRIPT = HARNESS_DIR / "engine" / "bin" / "stop.sh"
 PLATFORM_DIR = Path(__file__).resolve().parent
 PLATFORM_ENV_FILE = PLATFORM_DIR / ".env"
 
@@ -203,6 +205,15 @@ def _save_contacts(workdir: Path, contacts: dict) -> None:
     tmp = contacts_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(contacts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.rename(contacts_path)
+
+
+def _tail_file(path: Path, limit: int) -> str:
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")[-limit:]
+    except OSError:
+        return ""
 
 
 def _resolve_agent(name: str):
@@ -726,47 +737,49 @@ def api_agent_start(name: str):
     if not workdir:
         return jsonify({"error": "workdir not found"}), 404
 
-    provider = info.get("provider", "")
-    interval = info.get("interval", 20)
+    if not ENGINE_START_SCRIPT.exists():
+        return jsonify({"error": "engine start.sh not found"}), 500
+    if not ENGINE_STOP_SCRIPT.exists():
+        return jsonify({"error": "engine stop.sh not found"}), 500
 
-    # Read interval from Runtime/interval if available
-    interval_file = workdir / "Runtime" / "interval"
-    if interval_file.exists():
-        try:
-            interval = int(interval_file.read_text().strip())
-        except (ValueError, OSError):
-            pass
+    status = read_agent_status(str(workdir))
+    if status.get("runner_alive"):
+        return jsonify({"ok": True, "already_running": True})
 
-    start_script = workdir / f"start-{provider}.sh"
-    if not start_script.exists():
-        return jsonify({"error": f"start-{provider}.sh not found"}), 404
-
-    # Determine if bridge should be skipped
-    interaction = info.get("interaction", "")
-    env = dict(os.environ)
-    if interaction in ("web-ui", "platform"):
-        has_feishu = (workdir / "mailbox_bridge.env").exists()
-        if not has_feishu:
-            env["TASK_FORGE_SKIP_BRIDGE"] = "1"
-
-    result = subprocess.run(
-        ["bash", str(start_script), "--interval", str(interval)],
-        cwd=str(workdir),
+    stop_result = subprocess.run(
+        [str(ENGINE_STOP_SCRIPT), "--agent-dir", str(workdir)],
+        cwd=str(HARNESS_DIR),
         capture_output=True,
         text=True,
-        env=env,
-        timeout=30,
-        start_new_session=True,
+        timeout=45,
     )
-
-    if result.returncode != 0:
+    if stop_result.returncode != 0:
         return jsonify({
-            "error": "start failed",
-            "stdout": result.stdout[-500:] if result.stdout else "",
-            "stderr": result.stderr[-500:] if result.stderr else "",
+            "error": "pre-start stop failed",
+            "stdout": stop_result.stdout[-500:] if stop_result.stdout else "",
+            "stderr": stop_result.stderr[-500:] if stop_result.stderr else "",
         }), 500
 
-    return jsonify({"ok": True, "stdout": result.stdout[-300:] if result.stdout else ""})
+    log_file = workdir / "Runtime" / "logs" / "start.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("a", encoding="utf-8") as handle:
+        proc = subprocess.Popen(
+            [str(ENGINE_START_SCRIPT), "--agent-dir", str(workdir)],
+            cwd=str(HARNESS_DIR),
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    time.sleep(0.5)
+    if proc.poll() is not None:
+        return jsonify({
+            "error": "start failed",
+            "returncode": proc.returncode,
+            "stdout": _tail_file(log_file, 800),
+        }), 500
+
+    return jsonify({"ok": True, "pid": proc.pid, "stdout": _tail_file(log_file, 300)})
 
 
 # ── API: Stop ────────────────────────────────────────────────────────────
@@ -779,21 +792,20 @@ def api_agent_stop(name: str):
     if not workdir:
         return jsonify({"error": "workdir not found"}), 404
 
-    stop_script = workdir / "stop-agent.sh"
-    if stop_script.exists():
-        result = subprocess.run(
-            ["bash", str(stop_script)],
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return jsonify({
-            "ok": result.returncode == 0,
-            "stdout": result.stdout[-500:] if result.stdout else "",
-            "stderr": result.stderr[-500:] if result.stderr else "",
-        })
-    return jsonify({"error": "stop-agent.sh not found"}), 404
+    if not ENGINE_STOP_SCRIPT.exists():
+        return jsonify({"error": "engine stop.sh not found"}), 500
+    result = subprocess.run(
+        [str(ENGINE_STOP_SCRIPT), "--agent-dir", str(workdir)],
+        cwd=str(HARNESS_DIR),
+        capture_output=True,
+        text=True,
+        timeout=45,
+    )
+    return jsonify({
+        "ok": result.returncode == 0,
+        "stdout": result.stdout[-500:] if result.stdout else "",
+        "stderr": result.stderr[-500:] if result.stderr else "",
+    })
 
 
 # ── API: Delete agent (registry + workdir) ───────────────────────────────
@@ -809,13 +821,12 @@ def api_agent_delete(name: str):
     workdir = Path(info["workdir"])
 
     # Stop the agent first if running
-    stop_script = workdir / "stop-agent.sh"
-    if stop_script.exists():
+    if ENGINE_STOP_SCRIPT.exists():
         subprocess.run(
-            ["bash", str(stop_script)],
-            cwd=str(workdir),
+            [str(ENGINE_STOP_SCRIPT), "--agent-dir", str(workdir)],
+            cwd=str(HARNESS_DIR),
             capture_output=True,
-            timeout=30,
+            timeout=45,
         )
 
     # Remove workdir
