@@ -4,7 +4,7 @@
 const listeners = new Set();
 
 const state = {
-  view: 'dashboard',       // 'dashboard' | 'detail'
+  view: 'dashboard',       // 'dashboard' | 'detail' | 'memory'
   currentAgent: null,      // name string when view === 'detail'
   overview: null,          // { agents, connections, usage, revision }
   overviewError: null,

@@ -33,6 +33,11 @@ export function MemoryPanel({ name }) {
   }, [name, kind, episodeDate, index.loaded, index.loading]);
 
   useEffect(() => {
+    if (kind !== 'episodes' || episodeDate || !index.loaded || !index.dates.length) return;
+    setMemoryEpisodeDate(index.dates[0].date);
+  }, [kind, episodeDate, index.loaded, index.dates.length]);
+
+  useEffect(() => {
     if (!name || selectedPath || !index.items.length) return;
     loadMemoryFile(name, index.items[0].path);
   }, [name, kind, selectedPath, index.items.length]);
@@ -58,33 +63,31 @@ export function MemoryPanel({ name }) {
   }
 
   return html`
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Memory</h2>
-        <div class="tabs">
-          <button class=${kind === 'knowledge' ? 'tab active' : 'tab'} onClick=${() => switchKind('knowledge')}>Knowledge</button>
-          <button class=${kind === 'episodes' ? 'tab active' : 'tab'} onClick=${() => switchKind('episodes')}>Episodes</button>
-        </div>
-      </div>
-      ${kind === 'episodes' && index.dates.length ? html`
-        <div class="memory-date-filter">
-          <button class=${episodeDate ? 'date-chip' : 'date-chip active'} onClick=${() => setMemoryEpisodeDate('')}>All</button>
-          ${index.dates.map((entry) => html`
-            <button
-              key=${entry.date}
-              class=${episodeDate === entry.date ? 'date-chip active' : 'date-chip'}
-              onClick=${() => setMemoryEpisodeDate(entry.date)}
-            >
-              ${entry.date} ${entry.count}
-            </button>
-          `)}
-        </div>
-      ` : null}
+    <section class="panel memory-browser">
       <div class="memory-layout">
         <aside class="memory-list">
+          <div class="tabs memory-tabs">
+            <button class=${kind === 'knowledge' ? 'tab active' : 'tab'} onClick=${() => switchKind('knowledge')}>Knowledge</button>
+            <button class=${kind === 'episodes' ? 'tab active' : 'tab'} onClick=${() => switchKind('episodes')}>Episodes</button>
+          </div>
+          ${kind === 'episodes' && index.dates.length ? html`
+            <div class="memory-date-filter">
+              ${index.dates.map((entry) => html`
+                <button
+                  key=${entry.date}
+                  class=${episodeDate === entry.date ? 'date-chip active' : 'date-chip'}
+                  onClick=${() => setMemoryEpisodeDate(entry.date)}
+                >
+                  ${entry.date} ${entry.count}
+                </button>
+              `)}
+            </div>
+          ` : null}
           ${index.error ? html`<div class="memory-empty">Error: ${index.error}</div>` : null}
           ${!index.error && index.loading && !index.loaded ? html`<div class="memory-empty">Loading...</div>` : null}
-          ${!index.error && index.loaded && !index.items.length ? html`<div class="memory-empty">No files</div>` : null}
+          ${!index.error && index.loaded && !index.items.length && kind !== 'episodes' ? html`<div class="memory-empty">No files</div>` : null}
+          ${!index.error && index.loaded && !index.items.length && kind === 'episodes' && !index.dates.length ? html`<div class="memory-empty">No dates</div>` : null}
+          ${!index.error && index.loaded && !index.items.length && kind === 'episodes' && index.dates.length ? html`<div class="memory-empty">Select a date</div>` : null}
           ${rows.map((row) => row.type === 'date' ? html`
             <div key=${`date-${row.date}`} class="memory-date-separator">${row.date}</div>
           ` : html`

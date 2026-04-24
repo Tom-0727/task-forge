@@ -2,14 +2,13 @@ import { html } from '../../vendor/htm.mjs';
 import { useState } from '../../vendor/preact-hooks.mjs';
 import { useStore } from '../useStore.js';
 import { stateBadge, isStoppedLike } from '../util.js';
-import { goDashboard, refreshCurrent } from '../main.js';
+import { goDashboard, goMemory, refreshCurrent } from '../main.js';
 import * as api from '../api.js';
 
 import { StatusPanel } from './StatusPanel.js';
 import { ObservabilityPanel } from './ObservabilityPanel.js';
 import { ContactsPanel } from './ContactsPanel.js';
 import { HistoryPanel } from './HistoryPanel.js';
-import { MemoryPanel } from './MemoryPanel.js';
 import { SendPanel } from './SendPanel.js';
 
 
@@ -95,7 +94,13 @@ export function AgentDetail() {
       <${ObservabilityPanel} name=${name} />
       <${ContactsPanel} contacts=${detail.contacts || []} />
       <${HistoryPanel} detail=${detail} />
-      <${MemoryPanel} name=${name} />
+      <section class="panel memory-entry-panel">
+        <div class="panel-head">
+          <h2>Memory</h2>
+          <button onClick=${() => goMemory(name)}>Open Memory</button>
+        </div>
+        <div class="meta">Knowledge / Episodes</div>
+      </section>
       <${SendPanel} name=${name} />
     </div>
   `;

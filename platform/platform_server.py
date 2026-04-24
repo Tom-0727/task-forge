@@ -405,6 +405,17 @@ def _memory_index(workdir: Path, kind: str, limit: int, cursor: int, date_filter
             out["dates"] = []
         return out
 
+    if kind == "episodes" and not date_filter:
+        return {
+            "items": [],
+            "next_cursor": None,
+            "dates": [
+                {"date": date, "count": count}
+                for date, count in sorted(date_counts.items(), reverse=True)
+            ],
+            "date": "",
+        }
+
     entries.sort(key=lambda item: item[1], reverse=True)
     page = entries[cursor:cursor + limit]
     items = []
@@ -697,6 +708,12 @@ def _start_event_watcher() -> None:
 
 @app.route("/")
 def index():
+    return send_from_directory(app.static_folder, "index.html")
+
+
+@app.route("/agents/<path:name>")
+@app.route("/agents/<path:name>/memory")
+def app_route(name: str):
     return send_from_directory(app.static_folder, "index.html")
 
 

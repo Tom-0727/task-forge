@@ -8,6 +8,7 @@ import * as api from './api.js';
 
 import { Dashboard } from './components/Dashboard.js';
 import { AgentDetail } from './components/AgentDetail.js';
+import { MemoryPage } from './components/MemoryPage.js';
 import { CreateModal } from './components/CreateModal.js';
 import { ImportModal } from './components/ImportModal.js';
 
@@ -131,24 +132,37 @@ export async function loadMemoryFile(name, path) {
   }
 }
 
-// ── Navigation ──
-export function goDashboard() {
+function setPath(path) {
+  if (window.location.pathname !== path) {
+    window.history.pushState({}, '', path);
+  }
+}
+
+function resetMemoryState() {
+  return {
+    memoryIndex: emptyMemoryIndex(),
+    memoryFiles: {},
+    memoryKind: 'knowledge',
+    memoryEpisodeDate: '',
+    memorySelectedPath: null,
+  };
+}
+
+function showDashboard({ push = false } = {}) {
+  if (push) setPath('/');
   setState({
     view: 'dashboard',
     currentAgent: null,
     detail: null,
     metrics: null,
     metricsError: null,
-    memoryIndex: emptyMemoryIndex(),
-    memoryFiles: {},
-    memoryKind: 'knowledge',
-    memoryEpisodeDate: '',
-    memorySelectedPath: null,
+    ...resetMemoryState(),
   });
   loadOverview();
 }
 
-export function goDetail(name) {
+function showDetail(name, { push = false } = {}) {
+  if (push) setPath(`/agents/${encodeURIComponent(name)}`);
   setState({
     view: 'detail',
     currentAgent: name,
@@ -156,15 +170,53 @@ export function goDetail(name) {
     detailError: null,
     metrics: null,
     metricsError: null,
-    memoryIndex: emptyMemoryIndex(),
-    memoryFiles: {},
-    memoryKind: 'knowledge',
-    memoryEpisodeDate: '',
-    memorySelectedPath: null,
+    ...resetMemoryState(),
     historyContact: 'human',
   });
   loadDetail(name);
   loadMetrics(name);
+}
+
+function showMemory(name, { push = false } = {}) {
+  if (push) setPath(`/agents/${encodeURIComponent(name)}/memory`);
+  setState({
+    view: 'memory',
+    currentAgent: name,
+    detail: null,
+    detailError: null,
+    metrics: null,
+    metricsError: null,
+    ...resetMemoryState(),
+    historyContact: 'human',
+  });
+}
+
+function routeFromLocation() {
+  const path = window.location.pathname;
+  const memoryMatch = path.match(/^\/agents\/(.+)\/memory$/);
+  if (memoryMatch) {
+    showMemory(decodeURIComponent(memoryMatch[1]));
+    return;
+  }
+  const detailMatch = path.match(/^\/agents\/(.+)$/);
+  if (detailMatch) {
+    showDetail(decodeURIComponent(detailMatch[1]));
+    return;
+  }
+  showDashboard();
+}
+
+// ── Navigation ──
+export function goDashboard() {
+  showDashboard({ push: true });
+}
+
+export function goDetail(name) {
+  showDetail(name, { push: true });
+}
+
+export function goMemory(name) {
+  showMemory(name, { push: true });
 }
 
 export function setHistoryContact(contact) {
@@ -229,13 +281,17 @@ function App() {
   const modal = useStore((s) => s.modal);
 
   useEffect(() => {
-    loadOverview();
+    routeFromLocation();
+    window.addEventListener('popstate', routeFromLocation);
     wireEvents();
+    return () => window.removeEventListener('popstate', routeFromLocation);
   }, []);
 
   return html`
-    <main class="app">
-      ${view === 'dashboard' ? html`<${Dashboard} />` : html`<${AgentDetail} />`}
+    <main class=${view === 'memory' ? 'app app-wide' : 'app'}>
+      ${view === 'dashboard' ? html`<${Dashboard} />` : null}
+      ${view === 'detail' ? html`<${AgentDetail} />` : null}
+      ${view === 'memory' ? html`<${MemoryPage} />` : null}
       ${modal === 'create' ? html`<${CreateModal} />` : null}
       ${modal === 'import' ? html`<${ImportModal} />` : null}
     </main>
