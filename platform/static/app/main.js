@@ -236,14 +236,6 @@ export function setHistoryContact(contact) {
   if (s.currentAgent) loadDetail(s.currentAgent);
 }
 
-export function setMemoryKind(kind) {
-  const s = getState();
-  if (s.view === 'memory' && s.currentAgent) {
-    setPath(memoryPath(s.currentAgent, kind, kind === 'episodes' ? s.memoryEpisodeDate : ''));
-  }
-  setState({ memoryKind: kind, memorySelectedPath: null });
-}
-
 export function setMemoryEpisodeDate(date) {
   const s = getState();
   const current = s.memoryIndex.episodes || emptyMemoryBucket();

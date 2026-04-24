@@ -1,7 +1,10 @@
 import { html } from '../../vendor/htm.mjs';
 import { useEffect } from '../../vendor/preact-hooks.mjs';
 import { useStore } from '../useStore.js';
-import { loadMemoryFile, loadMemoryIndex, setMemoryEpisodeDate, setMemoryKind } from '../main.js';
+import { loadMemoryFile, loadMemoryIndex, setMemoryEpisodeDate } from '../main.js';
+
+
+const EMPTY_INDEX = { items: [], nextCursor: null, loaded: false, loading: false, error: null, dates: [] };
 
 
 function displayTitle(item, kind) {
@@ -21,7 +24,8 @@ function itemMeta(item, kind) {
 
 export function MemoryPanel({ name }) {
   const kind = useStore((s) => s.memoryKind);
-  const index = useStore((s) => s.memoryIndex[kind]);
+  const memoryIndex = useStore((s) => s.memoryIndex);
+  const index = memoryIndex[kind] || EMPTY_INDEX;
   const episodeDate = useStore((s) => s.memoryEpisodeDate);
   const selectedPath = useStore((s) => s.memorySelectedPath);
   const files = useStore((s) => s.memoryFiles);
@@ -42,11 +46,6 @@ export function MemoryPanel({ name }) {
     loadMemoryFile(name, index.items[0].path);
   }, [name, kind, selectedPath, index.items.length]);
 
-  const switchKind = (nextKind) => {
-    if (nextKind === kind) return;
-    setMemoryKind(nextKind);
-  };
-
   const loadMore = () => {
     if (index.nextCursor === null || index.loading) return;
     loadMemoryIndex(name, kind, { cursor: index.nextCursor, append: true });
@@ -66,10 +65,6 @@ export function MemoryPanel({ name }) {
     <section class="panel memory-browser">
       <div class="memory-layout">
         <aside class="memory-list">
-          <div class="tabs memory-tabs">
-            <button class=${kind === 'knowledge' ? 'tab active' : 'tab'} onClick=${() => switchKind('knowledge')}>Knowledge</button>
-            <button class=${kind === 'episodes' ? 'tab active' : 'tab'} onClick=${() => switchKind('episodes')}>Episodes</button>
-          </div>
           ${kind === 'episodes' && index.dates.length ? html`
             <div class="memory-date-filter">
               ${index.dates.map((entry) => html`
