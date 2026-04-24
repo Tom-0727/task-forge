@@ -1,7 +1,7 @@
 import { html } from '../../vendor/htm.mjs';
 import { useState, useEffect, useRef } from '../../vendor/preact-hooks.mjs';
 import * as api from '../api.js';
-import { refreshCurrent } from '../main.js';
+import { goMemory, refreshCurrent } from '../main.js';
 import { SchedulePanel } from './SchedulePanel.js';
 import { CompactPanel } from './CompactPanel.js';
 
@@ -66,7 +66,13 @@ export function StatusPanel({ detail }) {
     <section class="panel">
       <div class="panel-head">
         <h2>Status</h2>
-        <span class="meta">Last heartbeat: ${status.last_heartbeat || 'none'}</span>
+        <div class="status-head-right">
+          <div class="memory-entry-actions">
+            <button onClick=${() => goMemory(detail.name, 'episodes')}>Episodes</button>
+            <button class="secondary" onClick=${() => goMemory(detail.name, 'knowledge')}>Knowledge</button>
+          </div>
+          <span class="meta">Last heartbeat: ${status.last_heartbeat || 'none'}</span>
+        </div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:13px">
         <span style="color:var(--muted);font-weight:700">Interval</span>
