@@ -97,7 +97,10 @@ export function AgentDetail() {
       <section class="panel memory-entry-panel">
         <div class="panel-head">
           <h2>Memory</h2>
-          <button onClick=${() => goMemory(name)}>Open Memory</button>
+          <div class="memory-entry-actions">
+            <button onClick=${() => goMemory(name, 'episodes')}>Episodes</button>
+            <button class="secondary" onClick=${() => goMemory(name, 'knowledge')}>Knowledge</button>
+          </div>
         </div>
         <div class="meta">Knowledge / Episodes</div>
       </section>

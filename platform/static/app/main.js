@@ -133,17 +133,23 @@ export async function loadMemoryFile(name, path) {
 }
 
 function setPath(path) {
-  if (window.location.pathname !== path) {
+  if (`${window.location.pathname}${window.location.search}` !== path) {
     window.history.pushState({}, '', path);
   }
 }
 
-function resetMemoryState() {
+function memoryPath(name, kind = 'episodes', date = '') {
+  const qs = new URLSearchParams({ kind });
+  if (date) qs.set('date', date);
+  return `/agents/${encodeURIComponent(name)}/memory?${qs}`;
+}
+
+function resetMemoryState(kind = 'episodes', date = '') {
   return {
     memoryIndex: emptyMemoryIndex(),
     memoryFiles: {},
-    memoryKind: 'knowledge',
-    memoryEpisodeDate: '',
+    memoryKind: kind,
+    memoryEpisodeDate: kind === 'episodes' ? date : '',
     memorySelectedPath: null,
   };
 }
@@ -177,8 +183,9 @@ function showDetail(name, { push = false } = {}) {
   loadMetrics(name);
 }
 
-function showMemory(name, { push = false } = {}) {
-  if (push) setPath(`/agents/${encodeURIComponent(name)}/memory`);
+function showMemory(name, { push = false, kind = 'episodes', date = '' } = {}) {
+  if (kind !== 'knowledge' && kind !== 'episodes') kind = 'episodes';
+  if (push) setPath(memoryPath(name, kind, date));
   setState({
     view: 'memory',
     currentAgent: name,
@@ -186,7 +193,7 @@ function showMemory(name, { push = false } = {}) {
     detailError: null,
     metrics: null,
     metricsError: null,
-    ...resetMemoryState(),
+    ...resetMemoryState(kind, date),
     historyContact: 'human',
   });
 }
@@ -195,7 +202,11 @@ function routeFromLocation() {
   const path = window.location.pathname;
   const memoryMatch = path.match(/^\/agents\/(.+)\/memory$/);
   if (memoryMatch) {
-    showMemory(decodeURIComponent(memoryMatch[1]));
+    const params = new URLSearchParams(window.location.search);
+    showMemory(decodeURIComponent(memoryMatch[1]), {
+      kind: params.get('kind') || 'episodes',
+      date: params.get('date') || '',
+    });
     return;
   }
   const detailMatch = path.match(/^\/agents\/(.+)$/);
@@ -215,8 +226,8 @@ export function goDetail(name) {
   showDetail(name, { push: true });
 }
 
-export function goMemory(name) {
-  showMemory(name, { push: true });
+export function goMemory(name, kind = 'episodes') {
+  showMemory(name, { push: true, kind });
 }
 
 export function setHistoryContact(contact) {
@@ -226,12 +237,19 @@ export function setHistoryContact(contact) {
 }
 
 export function setMemoryKind(kind) {
+  const s = getState();
+  if (s.view === 'memory' && s.currentAgent) {
+    setPath(memoryPath(s.currentAgent, kind, kind === 'episodes' ? s.memoryEpisodeDate : ''));
+  }
   setState({ memoryKind: kind, memorySelectedPath: null });
 }
 
 export function setMemoryEpisodeDate(date) {
   const s = getState();
   const current = s.memoryIndex.episodes || emptyMemoryBucket();
+  if (s.view === 'memory' && s.currentAgent) {
+    setPath(memoryPath(s.currentAgent, 'episodes', date || ''));
+  }
   setState({
     memoryEpisodeDate: date || '',
     memorySelectedPath: null,
