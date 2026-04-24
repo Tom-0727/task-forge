@@ -351,20 +351,20 @@ def _path_mtime(path: Path) -> float:
         return 0.0
 
 
-def _episode_sort_and_date(path: Path) -> tuple[float, str]:
+def _episode_sort_and_date(path: Path) -> tuple[float, str, str]:
     match = _EPISODE_TS_RE.match(path.name)
     if match:
         stamp = match.group(1)
         try:
             dt = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-            return dt.timestamp(), dt.strftime("%Y-%m-%d")
+            return dt.timestamp(), dt.strftime("%Y-%m-%d"), dt.strftime("%Y-%m-%d %H:%M")
         except ValueError:
             pass
     mtime = _path_mtime(path)
     if not mtime:
-        return 0.0, "unknown"
+        return 0.0, "unknown", ""
     dt = datetime.fromtimestamp(mtime, timezone.utc)
-    return mtime, dt.strftime("%Y-%m-%d")
+    return mtime, dt.strftime("%Y-%m-%d"), dt.strftime("%Y-%m-%d %H:%M")
 
 
 def _memory_index(workdir: Path, kind: str, limit: int, cursor: int, date_filter: str = "") -> dict:
@@ -379,7 +379,7 @@ def _memory_index(workdir: Path, kind: str, limit: int, cursor: int, date_filter
             out["dates"] = []
         return out
 
-    entries: list[tuple[Path, float, str]] = []
+    entries: list[tuple[Path, float, str, str]] = []
     date_counts: dict[str, int] = {}
     root_resolved = root.resolve()
     try:
@@ -392,13 +392,13 @@ def _memory_index(workdir: Path, kind: str, limit: int, cursor: int, date_filter
             if not _is_memory_content_file(rel):
                 continue
             if kind == "episodes":
-                sort_key, episode_date = _episode_sort_and_date(path)
+                sort_key, episode_date, occurred_at = _episode_sort_and_date(path)
                 date_counts[episode_date] = date_counts.get(episode_date, 0) + 1
                 if date_filter and episode_date != date_filter:
                     continue
-                entries.append((path, sort_key, episode_date))
+                entries.append((path, sort_key, episode_date, occurred_at))
             else:
-                entries.append((path, _path_mtime(path), ""))
+                entries.append((path, _path_mtime(path), "", ""))
     except OSError:
         out = {"items": [], "next_cursor": None}
         if kind == "episodes":
@@ -419,7 +419,7 @@ def _memory_index(workdir: Path, kind: str, limit: int, cursor: int, date_filter
     entries.sort(key=lambda item: item[1], reverse=True)
     page = entries[cursor:cursor + limit]
     items = []
-    for path, _, episode_date in page:
+    for path, _, episode_date, occurred_at in page:
         try:
             stat = path.stat()
         except OSError:
@@ -440,6 +440,7 @@ def _memory_index(workdir: Path, kind: str, limit: int, cursor: int, date_filter
             item["title"] = fm.get("title", "")
             item["objective"] = fm.get("objective", "")
             item["date"] = episode_date
+            item["occurred_at"] = occurred_at
         items.append(item)
 
     next_cursor = cursor + limit if cursor + limit < len(entries) else None

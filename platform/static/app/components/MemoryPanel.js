@@ -17,8 +17,14 @@ function itemMeta(item, kind) {
   const parts = [];
   if (kind === 'episodes' && item.objective) parts.push(item.objective);
   if (item.status) parts.push(item.status);
-  if (item.last_edited_at) parts.push(item.last_edited_at);
-  else if (item.last_modified) parts.push(item.last_modified);
+  if (kind === 'episodes') {
+    if (item.occurred_at) parts.push(item.occurred_at);
+    else if (item.last_modified) parts.push(item.last_modified);
+  } else if (item.last_edited_at) {
+    parts.push(item.last_edited_at);
+  } else if (item.last_modified) {
+    parts.push(item.last_modified);
+  }
   return parts.join(' · ');
 }
 
@@ -92,7 +98,7 @@ export function MemoryPanel({ name }) {
               onClick=${() => loadMemoryFile(name, row.item.path)}
             >
               <span class="memory-item-title">${displayTitle(row.item, kind)}</span>
-              <span class="memory-item-path">${row.item.path}</span>
+              ${kind !== 'episodes' ? html`<span class="memory-item-path">${row.item.path}</span>` : null}
               ${itemMeta(row.item, kind) ? html`<span class="memory-item-meta">${itemMeta(row.item, kind)}</span>` : null}
             </button>
           `)}
