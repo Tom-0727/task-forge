@@ -4,7 +4,7 @@ description: Implementation plan for <project name>.
 kind: conceptual
 ---
 
-## 模块设计
+## Modules Design
 
 | Module | Responsibility |
 |---|---|
@@ -12,7 +12,7 @@ kind: conceptual
 | api_server | Thin FastAPI layer exposing `/episodes` and `/episodes/{id}` to the frontend |
 | dashboard_ui | Single-page React app; renders episode list, timeline, and filter controls |
 
-## 执行计划
+## Implementation Plan
 
 1. Implement `episode_poller` — connect to harness API, verify data shape matches PRD requirements, write cache.
 2. Implement `api_server` — serve cached data; add status and agent-type filter params.
