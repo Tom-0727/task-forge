@@ -7,23 +7,6 @@ description: On-demand workflow for software project development. Use when the t
 
 This skill is **on-demand**. It is NOT the default mode. Use it only when the current task needs a software-project lifecycle gate.
 
-## When to use this skill
-
-Use it when the current task is clearly software project development:
-
-- building a new system, service, module, library, or non-trivial tool;
-- a substantial rework that changes architecture or module boundaries;
-- work whose outcome will be maintained long-term and whose design decisions benefit from being recorded.
-
-Do NOT use it for:
-
-- one-off answers, chats, status syncs, routine reports;
-- small bug fixes, ad-hoc scripts, short research tasks;
-- operations, data queries, information gathering;
-- any task that can be completed with a couple of small edits.
-
-When in doubt, ask the human before activating.
-
 ## How this skill works under the heartbeat model
 
 This skill stores no internal state. Each heartbeat, follow exactly two steps:
@@ -88,10 +71,10 @@ All output of this skill lives in exactly three files under `Memory/knowledge/co
 
 - `conceptual--project--assumptions.md` — owned by state `assume`. A table of load-bearing assumptions (each with status: `unverified` / `verified` / `failed`) followed by a Detail section with the actual probe commands and observed results. An entry without real evidence does not count as `verified`.
 - `conceptual--project--prd.md` — owned by state `prd`. Must contain the following four sections in this order:
-  1. **目标与背景** — what problem this solves, why now (business value).
-  2. **用户与场景** — who uses it, in which key scenarios.
-  3. **需求定义** — what features the system must provide, plus explicit boundaries. The "不做什么" list is mandatory, not optional.
-  4. **验收标准** — what counts as done: indicators / test criteria / definition of success.
+  1. **Objective and Background** — what problem this solves, why now (business value).
+  2. **User and Scenarios** — who uses it, in which key scenarios.
+  3. **Requirement** — what features the system must provide, plus explicit boundaries. The "不做什么" list is mandatory, not optional.
+  4. **Criteria** — what counts as done: indicators / test criteria / definition of success.
   The PRD must not contain architecture, module decomposition, or technology choices.
 - `conceptual--project--implementation-plan.md` — owned by state `plan`. Two sections: module design (table of modules and responsibilities) and execution plan (numbered steps in order).
 
