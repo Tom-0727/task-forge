@@ -241,7 +241,6 @@ def scaffold_workspace(workdir: Path, agent_name: str, goal: str, provider: str)
         "Memory/knowledge/heuristic",
         "Memory/knowledge/metacognitive",
         "Memory/episodes",
-        "tool-notes",
         "Runtime/pending_messages",
         "Runtime/awaiting_reply",
         "Runtime/pids",
@@ -257,8 +256,6 @@ def scaffold_workspace(workdir: Path, agent_name: str, goal: str, provider: str)
           render(TEMPLATE_DIR / "knowledge-README.md.tmpl", replacements))
     write(workdir / "Memory" / "episodes" / "README.md",
           render(TEMPLATE_DIR / "episodes-README.md.tmpl", replacements))
-    write(workdir / "tool-notes" / "README.md",
-          render(TEMPLATE_DIR / "tool-notes-README.md.tmpl", replacements))
     write(workdir / "mailbox" / "README.md",
           render(TEMPLATE_DIR / "mailbox-README.md.tmpl", replacements))
 

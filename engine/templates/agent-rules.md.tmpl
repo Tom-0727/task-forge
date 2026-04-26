@@ -28,7 +28,6 @@ Shared skills under `{{SKILLS_DIR}}/` are symlinks into the central engine — d
 ./
   {{RULES_FILENAME}}                 # This file — your behavioral rules (always loaded)
 {{WORKSPACE_PROVIDER_LAYOUT}}
-  tool-notes/               # One file per non-native external tool
   mailbox/
     contacts.json           # Contact list (human + connected agents)
     human.jsonl             # Messages with human (append-only)
@@ -58,7 +57,7 @@ Shared skills under `{{SKILLS_DIR}}/` are symlinks into the central engine — d
 
 - Raw task logs → `Memory/episodes/`
 - Stable global behavior rules → `{{RULES_FILENAME}}`
-- External tool usage procedures → `tool-notes/`
+- Reusable executable workflows → skills under `{{SKILLS_DIR}}/`
 
 ### Creating and updating knowledge
 
@@ -92,14 +91,6 @@ Shared skills under `{{SKILLS_DIR}}/` are symlinks into the central engine — d
 ### Creating and updating episodes
 
 **Before creating or updating any episode, you MUST read `Memory/episodes/README.md`** for the unit-of-record definition, file naming convention, required frontmatter, and body template.
-
-## tool-notes/ — External Tool Documentation
-
-`tool-notes/` stores one note per non-native external tool you discover after deployment. One tool = one file.
-
-When you encounter a new external tool that is non-obvious and likely to recur, **read `tool-notes/README.md`** for the naming convention and template, then create a note.
-
-When you need to use a previously documented tool, search `tool-notes/` by filename or content.
 
 ## mailbox/ — Human-Agent Communication
 

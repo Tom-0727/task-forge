@@ -53,6 +53,8 @@ async function main(): Promise<void> {
 
   let shuttingDown = false;
   let child: ReturnType<typeof spawn> | null = null;
+  let finalState: "stopped" | "engine_build_failed" | "crashed" = "stopped";
+  let exitCode = 0;
 
   const forward = (sig: NodeJS.Signals) => {
     shuttingDown = true;
@@ -67,8 +69,9 @@ async function main(): Promise<void> {
     log.info(`supervisor starting for ${identity.agent_name} (${identity.provider})`);
 
     if (!runEngineEnsure(log)) {
-      writeState(paths, "engine_build_failed");
-      process.exit(1);
+      finalState = "engine_build_failed";
+      exitCode = 1;
+      return;
     }
 
     const entry = runtimeEntrypoint(identity.provider);
@@ -104,8 +107,9 @@ async function main(): Promise<void> {
 
       if (crashCount >= MAX_CRASHES) {
         log.error(`runtime crashed ${MAX_CRASHES} times; giving up`);
-        writeState(paths, "crashed");
-        process.exit(1);
+        finalState = "crashed";
+        exitCode = 1;
+        return;
       }
 
       const waitSec = BACKOFF_SEQ[Math.min(crashCount - 1, BACKOFF_SEQ.length - 1)];
@@ -114,12 +118,13 @@ async function main(): Promise<void> {
     }
   } catch (err) {
     log.error(`supervisor error: ${(err as Error).message}`);
-    writeState(paths, "crashed");
-    process.exit(1);
+    finalState = "crashed";
+    exitCode = 1;
   } finally {
-    writeState(paths, "stopped");
+    writeState(paths, finalState);
     cleanupPid(paths, "supervisor");
-    log.info("supervisor stopped");
+    log.info(`supervisor stopped state=${finalState}`);
+    if (exitCode !== 0) process.exitCode = exitCode;
   }
 }
 

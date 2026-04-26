@@ -9,6 +9,7 @@ import * as api from './api.js';
 import { Dashboard } from './components/Dashboard.js';
 import { AgentDetail } from './components/AgentDetail.js';
 import { MemoryPage } from './components/MemoryPage.js';
+import { TodoPage } from './components/TodoPage.js';
 import { CreateModal } from './components/CreateModal.js';
 import { ImportModal } from './components/ImportModal.js';
 
@@ -144,6 +145,10 @@ function memoryPath(name, kind = 'episodes', date = '') {
   return `/agents/${encodeURIComponent(name)}/memory?${qs}`;
 }
 
+function todosPath(name) {
+  return `/agents/${encodeURIComponent(name)}/todos`;
+}
+
 function resetMemoryState(kind = 'episodes', date = '') {
   return {
     memoryIndex: emptyMemoryIndex(),
@@ -198,8 +203,27 @@ function showMemory(name, { push = false, kind = 'episodes', date = '' } = {}) {
   });
 }
 
+function showTodos(name, { push = false } = {}) {
+  if (push) setPath(todosPath(name));
+  setState({
+    view: 'todo',
+    currentAgent: name,
+    detail: null,
+    detailError: null,
+    metrics: null,
+    metricsError: null,
+    ...resetMemoryState(),
+    historyContact: 'human',
+  });
+}
+
 function routeFromLocation() {
   const path = window.location.pathname;
+  const todoMatch = path.match(/^\/agents\/(.+)\/todos$/);
+  if (todoMatch) {
+    showTodos(decodeURIComponent(todoMatch[1]));
+    return;
+  }
   const memoryMatch = path.match(/^\/agents\/(.+)\/memory$/);
   if (memoryMatch) {
     const params = new URLSearchParams(window.location.search);
@@ -228,6 +252,10 @@ export function goDetail(name) {
 
 export function goMemory(name, kind = 'episodes') {
   showMemory(name, { push: true, kind });
+}
+
+export function goTodos(name) {
+  showTodos(name, { push: true });
 }
 
 export function setHistoryContact(contact) {
@@ -298,10 +326,11 @@ function App() {
   }, []);
 
   return html`
-    <main class=${view === 'memory' ? 'app app-wide' : 'app'}>
+    <main class=${view === 'memory' || view === 'todo' ? 'app app-wide' : 'app'}>
       ${view === 'dashboard' ? html`<${Dashboard} />` : null}
       ${view === 'detail' ? html`<${AgentDetail} />` : null}
       ${view === 'memory' ? html`<${MemoryPage} />` : null}
+      ${view === 'todo' ? html`<${TodoPage} />` : null}
       ${modal === 'create' ? html`<${CreateModal} />` : null}
       ${modal === 'import' ? html`<${ImportModal} />` : null}
     </main>

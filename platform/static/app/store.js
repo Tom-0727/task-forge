@@ -4,8 +4,8 @@
 const listeners = new Set();
 
 const state = {
-  view: 'dashboard',       // 'dashboard' | 'detail' | 'memory'
-  currentAgent: null,      // name string when view === 'detail'
+  view: 'dashboard',       // 'dashboard' | 'detail' | 'memory' | 'todo'
+  currentAgent: null,      // name string for agent-scoped views
   overview: null,          // { agents, connections, usage, revision }
   overviewError: null,
   detail: null,            // full detail payload for currentAgent

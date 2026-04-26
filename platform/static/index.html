@@ -591,6 +591,134 @@
       color: var(--muted);
     }
 
+    /* ── Todos ── */
+    .todo-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .todo-toolbar input[type="date"],
+    .todo-toolbar input[type="time"],
+    .todo-date-input {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font: inherit;
+      font-size: 12px;
+      color: var(--ink);
+      background: #fff;
+    }
+    .todo-toolbar button,
+    .todo-small-btn,
+    .todo-icon-btn {
+      padding: 5px 10px;
+      font-size: 12px;
+      border-radius: 7px;
+    }
+    .todo-icon-btn {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      flex: 0 0 auto;
+    }
+    .todo-due {
+      margin-bottom: 10px;
+      padding: 8px 10px;
+      border: 1px solid rgba(133, 100, 4, 0.24);
+      border-radius: 8px;
+      background: var(--wait-bg);
+      color: var(--wait-fg);
+      font-size: 12px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .todo-list {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }
+    .todo-item {
+      display: grid;
+      gap: 8px;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.58);
+      min-width: 0;
+    }
+    .todo-row,
+    .todo-subtask {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .todo-row > input[type="text"],
+    .todo-subtask > input[type="text"] {
+      min-width: 120px;
+      flex: 1 1 220px;
+    }
+    .todo-row > select {
+      width: 110px;
+      flex: 0 0 auto;
+      padding: 6px 8px;
+      font-size: 12px;
+      border-radius: 8px;
+    }
+    .todo-row > input[type="time"] {
+      width: 96px;
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font: inherit;
+      font-size: 12px;
+    }
+    .todo-id {
+      flex: 0 0 auto;
+      min-width: 38px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--off-bg);
+      color: var(--off-fg);
+      font-size: 11px;
+      font-weight: 700;
+      text-align: center;
+    }
+    .todo-item textarea {
+      min-height: 54px;
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 13px;
+    }
+    .todo-subtasks {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .todo-empty {
+      padding: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.4);
+    }
+    .todo-scheduled {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px dashed var(--line);
+    }
+    .todo-weekdays {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
     /* ── Schedule row ── */
     .sched-row {
       display: flex;
@@ -678,6 +806,17 @@
       .panel-head {
         flex-direction: column;
         align-items: flex-start;
+      }
+      .todo-toolbar {
+        justify-content: flex-start;
+      }
+      .todo-row,
+      .todo-subtask {
+        flex-wrap: wrap;
+      }
+      .todo-row > input[type="text"],
+      .todo-subtask > input[type="text"] {
+        flex-basis: 100%;
       }
     }
 

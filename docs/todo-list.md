@@ -60,6 +60,13 @@ Skill (portable across provider runtimes, lives under `engine/skills/`):
 
 Provider wiring (runs the hook and injects the two sections into wake-up prompts) lives in `engine/src/harness-core/prompt.ts` (section loaders) and `engine/src/{claude,codex}/runtime.ts` (heartbeat entry points invoke the hook via `engine/skills/todo/scripts/pre_heartbeat.py` before prompt composition).
 
+Platform UI wiring lives in `platform/server/`, `platform/static/app/components/TodoPage.js`, and `platform/static/app/components/TodoPanel.js`:
+
+- `GET /api/agents/<name>/todo?date=YYYY-MM-DD` reads one day's todos plus global scheduled tasks.
+- `POST /api/agents/<name>/todo` atomically rewrites one day's todo JSON list after validation.
+- `POST /api/agents/<name>/todo/scheduled` atomically rewrites `scheduled_tasks.json` after validation.
+- The Agent detail page links to `/agents/<name>/todos`; todo data loads through the dedicated todo API rather than the detail payload.
+
 ## Verification
 
 Two levels, both should be re-run when this mechanism changes:

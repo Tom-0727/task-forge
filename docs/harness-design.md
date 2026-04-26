@@ -26,8 +26,6 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
 
 - `AGENTS.md / CLAUDE.md`
   稳定的行为规则。根目录和关键子目录都使用 provider 对应的规则文件名；Codex 用 `AGENTS.md`，Claude 用 `CLAUDE.md`。
-- `tool-notes/`
-  部署后发现的非原生外部工具的使用说明。一个工具一个文件。
 - `Memory/knowledge/`
   提炼后的长期知识。
 - `Memory/episodes/`
@@ -73,9 +71,8 @@ Codex 和 Claude 的 runtime 已经提供了原子能力：
 - 原始任务日志
 - 可复用的完整工作流
 - 稳定的全局行为规则
-- 外部工具使用程序
 
-这些分别属于 `Memory/episodes/`、`skills/`、`AGENTS.md / CLAUDE.md` 和 `tool-notes/`。
+这些分别属于 `Memory/episodes/`、`skills/` 和 `AGENTS.md / CLAUDE.md`。
 
 ### 2.2 目录结构
 
@@ -282,8 +279,6 @@ Memory/
 
 - `AGENTS.md / CLAUDE.md`
   始终生效的行为约束和工作风格。
-- `tool-notes/`
-  如何使用非原生外部工具。
 - `Memory/knowledge/`
   事实、概念、启发式规则和元认知笔记。
 - `Memory/episodes/`
@@ -291,57 +286,9 @@ Memory/
 - `skills/`
   按需加载的可复用可执行能力。
 
-## 5. tool-notes/（工具文档）
+## 5. Heartbeat（心跳机制）
 
 ### 5.1 目的
-
-`tool-notes/` 记录部署后遇到的非原生外部工具的使用方法。一个工具一个文件。
-
-它不解释原生 Codex/Claude 能力，例如：
-
-- 文件系统访问
-- 网络搜索
-- 终端访问
-- 内置工具调用
-
-### 5.2 什么属于这里
-
-在以下情况下在 `tool-notes/` 中创建工具笔记：
-
-- 它不是原生运行时的一部分
-- 智能体后来才获得了访问权限
-- 其用法不够直观，遗忘会导致摩擦
-- 它可能在多个任务中反复出现
-
-示例：
-
-- 内部 REST API
-- 通过适配器暴露的第三方 SaaS 管理控制台
-- 自定义 MCP 服务器
-- 为特定工作流安装的本地 CLI
-
-不要记录在此处：
-
-- 通用业务方法论
-- 技能程序
-- 使用工具时学到的事实
-- 原生 Codex/Claude 工具行为
-
-### 5.3 文件格式规范
-
-命名、元数据、正文模板等详细规范存放在 `tool-notes/AGENTS.md` 或 `tool-notes/CLAUDE.md` 中。
-
-智能体在创建或更新工具笔记时，必须先读取该规则文件。
-
-概要：
-
-- 命名：`tool--<slug>.md`
-- 必需 frontmatter：`id`, `name`, `last_edited_at`, `status`
-- 正文包含：用途、访问方式、输入、输出、认证/配置、调用模板、失败模式
-
-## 6. Heartbeat（心跳机制）
-
-### 6.1 目的
 
 心跳是框架层的编排机制，用于定期决定是否继续在同一个 provider 会话上工作。
 
@@ -350,7 +297,7 @@ Codex 通过 `run_codex.mjs`（基于官方 Codex SDK）实现。
 
 默认间隔：每 20 分钟。
 
-### 6.2 运行时
+### 5.2 运行时
 
 支持两套运行时：
 
@@ -365,7 +312,7 @@ Codex 通过 `run_codex.mjs`（基于官方 Codex SDK）实现。
   - 轨迹能力：通过 `runStreamed()` 捕获完整事件流，并追加写入 `Runtime/codex_events.jsonl`
   - 工具能力：沿用 Codex 自带的工具体系与认证方式，而不是额外再包一层 Python agent SDK
 
-### 6.3 循环
+### 5.3 循环
 
 每次心跳唤醒时：
 
@@ -379,9 +326,9 @@ Codex 通过 `run_codex.mjs`（基于官方 Codex SDK）实现。
 - 再写入运行时状态，要求下一次心跳立刻恢复同一个会话
 - 不应把同一条人类消息同时作为额外 prompt 再注入一次运行时
 
-## 7. mailbox/（邮箱 / 询问人类）
+## 6. mailbox/（邮箱 / 询问人类）
 
-### 7.1 目的
+### 6.1 目的
 
 `mailbox/MAILBOX.jsonl` 是人类-智能体之间唯一的通信界面。
 
@@ -391,7 +338,7 @@ Codex 通过 `run_codex.mjs`（基于官方 Codex SDK）实现。
 - 智能体请求人类帮助
 - 人类回复、决策和指令
 
-### 7.2 文件格式规范
+### 6.2 文件格式规范
 
 消息格式、操作规则等详细规范存放在 `mailbox/AGENTS.md` 或 `mailbox/CLAUDE.md` 中。
 

@@ -111,7 +111,7 @@ Verdict: <X patterns should become skills>
 
 ### Audit 3 — Skill & Scaffolding Pruning
 
-**Goal**: Find skills, tool-notes, or knowledge entries that are unused,
+**Goal**: Find skills or knowledge entries that are unused,
 redundant, error-prone, or actively harmful to efficiency.
 
 Steps:
@@ -128,9 +128,7 @@ Steps:
    - **Redundant**: Two skills with overlapping scope.
    - **Overly complex**: Skill that tries to do too many things, leading to
      confusion or misuse.
-6. Also scan `tool-notes/` for notes about tools that are no longer available
-   or relevant.
-7. Scan `Memory/knowledge/` for stale or contradictory entries (check
+6. Scan `Memory/knowledge/` for stale or contradictory entries (check
    `last_edited_at` in frontmatter — anything older than 30 days with no
    episode references is suspect).
 
@@ -140,7 +138,7 @@ Output format:
 
 | Item | Type | Usage (episodes) | Issue | Recommendation |
 |------|------|-------------------|-------|----------------|
-| ...  | skill/tool-note/knowledge | N | unused/error-prone/redundant/stale | DELETE/SIMPLIFY/MERGE/KEEP |
+| ...  | skill/knowledge | N | unused/error-prone/redundant/stale | DELETE/SIMPLIFY/MERGE/KEEP |
 
 Verdict: <X items should be removed or simplified>
 Estimated impact: <how this would improve agent efficiency>

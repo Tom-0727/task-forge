@@ -26,8 +26,12 @@ start_platform() {
     return 1
   fi
 
-  nohup "${PYTHON_BIN}" "${SERVER_SCRIPT}" --host "${PLATFORM_HOST}" --port "${PLATFORM_PORT}" </dev/null >>"${LOG_FILE}" 2>&1 &
+  local start_cwd
+  start_cwd="$(pwd)"
+  cd "${SCRIPT_DIR}"
+  nohup setsid "${PYTHON_BIN}" -m "${SERVER_MODULE}" --host "${PLATFORM_HOST}" --port "${PLATFORM_PORT}" </dev/null >>"${LOG_FILE}" 2>&1 &
   local pid="$!"
+  cd "${start_cwd}"
   printf '%s\n' "${pid}" > "${PID_FILE}"
   disown "${pid}" 2>/dev/null || true
 

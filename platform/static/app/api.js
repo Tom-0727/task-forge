@@ -86,6 +86,30 @@ export function saveSchedule(name, schedule) {
   });
 }
 
+export function getTodo(name, { date = '' } = {}) {
+  const params = {};
+  if (date) params.date = date;
+  const qs = new URLSearchParams(params);
+  const suffix = qs.toString() ? `?${qs}` : '';
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/todo${suffix}`);
+}
+
+export function saveTodos(name, date, todos) {
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/todo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date, todos }),
+  });
+}
+
+export function saveScheduledTasks(name, scheduledTasks) {
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/todo/scheduled`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scheduled_tasks: scheduledTasks }),
+  });
+}
+
 export function createAgent(payload) {
   return jsonRequest('/api/agents/create', {
     method: 'POST',

@@ -8,7 +8,8 @@ PID_FILE="${RUNTIME_DIR}/platform.pid"
 LOG_FILE="${RUNTIME_DIR}/platform.log"
 ENV_FILE="${SCRIPT_DIR}/.env"
 PYTHON_BIN="${SCRIPT_DIR}/.venv/bin/python"
-SERVER_SCRIPT="${SCRIPT_DIR}/platform_server.py"
+SERVER_MODULE="server.app"
+SERVER_ENTRY="${SCRIPT_DIR}/server/app.py"
 
 PLATFORM_HOST="${PLATFORM_HOST:-127.0.0.1}"
 PLATFORM_PORT="${PLATFORM_PORT:-9000}"
@@ -40,8 +41,8 @@ require_runtime_files() {
     exit 1
   fi
 
-  if [[ ! -f "${SERVER_SCRIPT}" ]]; then
-    echo "Error: missing server script: ${SERVER_SCRIPT}" >&2
+  if [[ ! -f "${SERVER_ENTRY}" ]]; then
+    echo "Error: missing server entry: ${SERVER_ENTRY}" >&2
     exit 1
   fi
 }
@@ -66,7 +67,7 @@ is_platform_pid() {
   fi
 
   args="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
-  [[ "${args}" == *"${SERVER_SCRIPT}"* ]]
+  [[ "${args}" == *"-m ${SERVER_MODULE}"* ]]
 }
 
 is_listening() {

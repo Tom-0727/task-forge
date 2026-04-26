@@ -56,7 +56,7 @@ Platform Server (单进程，单端口)
 - 后端：Python + Flask（项目已有 Python 生态，且 `uv` 管理依赖）
 - 前端：单 HTML 文件 SPA（与现有 `web_ui_server.py` 风格一致，无需构建工具）
 - 数据存储：文件系统（JSON 文件作为 Registry，Agent 自身的文件作为数据源）
-- 运行方式：`uv run python platform_server.py --port 9000`
+- 运行方式：`uv run python -m server.app --port 9000`
 
 ## 3. Agent Registry（注册中心）
 
@@ -368,7 +368,7 @@ GET /api/usage
 
 ```
 platform/
-  platform_server.py    # 后端主入口
+  server/               # 后端 Flask app、routes、services
   registry.py           # Agent 注册中心操作
   static/
     index.html          # SPA 前端
