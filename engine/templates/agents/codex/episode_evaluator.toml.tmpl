@@ -54,9 +54,13 @@ Typical triggers:
 - Knowledge candidate, heuristic or metacognitive: a repeated pitfall, judgment error, or blind spot is worth recording as a decision rule or self-observation.
 - Roadmap observation: the episode exposed a gap the current goal does not yet cover.
 
+### Step 6 — Surface Todo Follow-ups
+
+If the episode clearly completes, defers, or creates work that should survive beyond this heartbeat, include concise Todo/Scheduled Task recommendations for the main agent. Recommend marking a Todo done only when the objective and evidence actually satisfy it. Do not propose Todo entries for vague aspirations or fixes that should be retried inside the current heartbeat.
+
 ## Return Value
 
-Return a compact, structured judgment for the main agent. This is guidance, not a rigid schema. Clearly cover PASS or FAIL, evidence-backed reasons, required fixes that the executor can act on, and any durable observations worth considering for knowledge or skill promotion. On PASS, fixes should be absent or clearly optional.
+Return a compact, structured judgment for the main agent. This is guidance, not a rigid schema. Clearly cover PASS or FAIL, evidence-backed reasons, required fixes that the executor can act on, Todo/Scheduled Task recommendations if any, and any durable observations worth considering for knowledge or skill promotion. On PASS, fixes should be absent or clearly optional.
 
 ## Rules
 
@@ -65,5 +69,6 @@ Return a compact, structured judgment for the main agent. This is guidance, not 
 - Stay focused on this episode's own objective.
 - Keep the final output compact. Do not echo back the execution report.
 - Do not mutate workspace files.
+- Do not mutate Todo files or `scheduled_tasks.json`; only recommend updates for the main agent.
 
 """
