@@ -28,7 +28,7 @@ All writes use write-to-tempfile + `os.replace` so the human frontend and the ag
 2. **Pre-heartbeat hook** — runs `engine/skills/todo/scripts/pre_heartbeat.py` before the wake-up prompt is composed. It scans `scheduled_tasks.json`, matches on the current `HH:MM` (weekday for `kind=weekly`, exact date for `kind=date`), writes due ids to `Runtime/due_reminders.json`, and appends `"<id>@<now_minute>"` entries to `Runtime/scheduled_delivered.json` so the same minute never fires twice.
 3. **Prompt composition** — the provider runtime reads `Runtime/due_reminders.json` + today's `todo_list/<YYYYMM>/<DD>.json` and injects two sections into the wake-up prompt:
    - `Due reminders this minute:` (titles for each due scheduled task)
-   - `Today's Todos:` (indented list with subtasks and done-marks)
+   - `Today's Todos (YYYY-MM-DD):` (indented list with subtasks and done-marks)
    Missing files degrade to empty sections, never a crash.
 4. **Agent edits** — during the heartbeat the agent uses the SDK-native Read/Edit/Write tools on the day file for Todos, or the dedicated CLI scripts for Scheduled Tasks (see below).
 

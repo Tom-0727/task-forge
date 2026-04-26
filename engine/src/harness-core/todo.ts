@@ -48,7 +48,8 @@ export function renderTodayTodosSection(paths: AgentPaths, today: Date = new Dat
   const items = safeJsonList(dayFile) as TodoItem[];
   if (items.length === 0) return "";
 
-  const lines = ["Today's Todos:"];
+  const dateLabel = `${y}-${m}-${d}`;
+  const lines = [`Today's Todos (${dateLabel}):`];
   for (const item of items) {
     if (!item || typeof item !== "object") continue;
     const mark = item.done ? "x" : " ";

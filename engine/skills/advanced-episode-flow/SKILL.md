@@ -37,13 +37,15 @@ Plan runs in two steps: a lightweight Situation Sync by the main agent, then a h
 Situation Sync:
 
 1. Treat the heartbeat wake-up prompt as authoritative about fresh mailbox state. If it lists newly-arrived messages, run `uv run python {skills-dir}/mailbox-operate/scripts/read_mailbox.py --summary` once to see them all, then `uv run python {skills-dir}/mailbox-operate/scripts/read_mailbox.py --from <contact>` only for any message whose full text is needed. If the wake-up prompt reports no new messages, skip the mailbox entirely.
-2. From working memory, recall the prior episode's outcome in one line (completed / failed + brief reason) and any open threads, constraints, or unresolved questions that files alone cannot convey.
+2. Treat `Due reminders this minute` and `Today's Todos` in the wake-up prompt as current pending work. Select only the relevant reminder/Todo ids for this episode; do not scan todo files unless objective selection depends on missing Todo context.
+3. From working memory, recall the prior episode's outcome in one line (completed / failed + brief reason) and any open threads, constraints, or unresolved questions that files alone cannot convey.
 
 Main -> planner handoff:
 
 Spawn the provider's episode planner subagent with a short handoff brief: pointers and scarce facts only, not a dump. The brief should cover:
 
 - a 1-3 line summary per newly-arrived mailbox message, each with a pointer such as `mailbox/human.jsonl` and the mailbox id; omit this if the wake-up prompt reported no new messages;
+- relevant due reminders and today's Todos, with ids and one-line reason they matter; omit unrelated items;
 - a one-line status of the prior episode plus its file path;
 - any open threads, constraints, or in-flight commitments held in session memory that files cannot express;
 - an explicit note that these are the fresh inputs for this heartbeat and older mailbox entries were handled in prior heartbeats.
@@ -52,7 +54,7 @@ Do not paste full message bodies, entire prior episodes, or the main agent's own
 
 Planner -> main return:
 
-The planner should return a compact, structured planning brief rather than a rigid schema. It should cover the episode path, the selected objective, why that objective was selected, key assumptions, execution direction, risks or stop conditions, and evidence the executor should try to produce. Treat the planner's execution guidance as the primary planning input for Phase 2, but keep enough rationale in the main context to judge whether the executor's later deviations are acceptable.
+The planner should return a compact, structured planning brief rather than a rigid schema. It should cover the episode path, the selected objective, why that objective was selected, any Todo/reminder ids consumed or deferred, key assumptions, execution direction, risks or stop conditions, and evidence the executor should try to produce. Treat the planner's execution guidance as the primary planning input for Phase 2, but keep enough rationale in the main context to judge whether the executor's later deviations are acceptable.
 
 ### Phase 2 - Execute
 
@@ -80,12 +82,13 @@ Spawn the provider's episode evaluator subagent. Give it `episode_path`, the exe
 
 Evaluator -> main return:
 
-The evaluator should return a compact judgment, not a rigid schema. It should clearly state PASS or FAIL, the evidence-backed reasons, any required fixes that an executor can act on, and any durable observations worth considering for knowledge or skill promotion.
+The evaluator should return a compact judgment, not a rigid schema. It should clearly state PASS or FAIL, the evidence-backed reasons, any required fixes that an executor can act on, any concrete Todo/Scheduled Task updates the main agent should make after evaluation, and any durable observations worth considering for knowledge or skill promotion.
 
 On PASS:
 
 - set `status: completed`;
 - write a concise Outcome / Reflection section;
+- mark satisfied Todos done, and create or update Todos only for concrete follow-up work that must survive beyond this heartbeat;
 - end the heartbeat.
 
 On FAIL:
@@ -99,10 +102,11 @@ On 3 rounds still FAIL, or on an execution-blocking obstacle that cannot be work
 
 - set `status: failed`;
 - briefly record why in Outcome;
+- create a Todo or Scheduled Task only when there is a concrete future action or time-based retry;
 - send a mailbox message to `human` reporting the blocker.
 
 Regardless of verdict, if `observations` is non-empty, decide whether any deserves immediate follow-up such as `skill-creator` or a new knowledge note.
 
 ## Exit
 
-An episode lives only inside a single heartbeat. Remaining work becomes starting context for the next advanced heartbeat's planner.
+An episode lives only inside a single heartbeat. Remaining work becomes starting context for the next advanced heartbeat's planner through concise Todo entries, Scheduled Tasks, knowledge notes, or the episode Outcome; choose the narrowest durable record that fits.

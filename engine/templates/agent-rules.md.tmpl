@@ -39,6 +39,8 @@ Shared skills under `{{SKILLS_DIR}}/` are symlinks into the central engine — d
       heuristic/
       metacognitive/
     episodes/               # Bounded execution records
+  todo_list/                 # Daily durable Todos surfaced in heartbeat prompts
+  scheduled_tasks.json       # Time-based wake-up reminders
   Runtime/
     agent.json              # Identity + runtime config (do not hand-edit)
     ...                     # Other scheduler state files
@@ -91,6 +93,12 @@ Shared skills under `{{SKILLS_DIR}}/` are symlinks into the central engine — d
 ### Creating and updating episodes
 
 **Before creating or updating any episode, you MUST read `Memory/episodes/README.md`** for the unit-of-record definition, file naming convention, required frontmatter, and body template.
+
+## todo_list/ — Durable Work Queue
+The runtime injects due scheduled reminders and today's Todo list into heartbeat prompts when present. Treat that injected state as the first source of truth for current pending work.
+Use Todo for work that should survive beyond the current heartbeat: multi-heartbeat next steps, deferred episode follow-ups, candidate actions that must not be lost, or concrete work created after a timed reminder fires. Do not use Todo for scratch reasoning, raw logs, stable knowledge, tool procedures, or one-shot work that will finish in this heartbeat.
+Use Scheduled Tasks only for time-based wake-ups, such as "start organizing information at 19:00" or a weekly check. A Scheduled Task is a timer, not a completion-bearing task; if it creates real work, update or create a Todo.
+When `advanced-episode-flow` is active, pass relevant Todo/reminder ids to the planner and update Todos only after evaluation for concrete completed or deferred work. Follow the `todo` skill contract for exact file formats and scripts.
 
 ## mailbox/ — Human-Agent Communication
 

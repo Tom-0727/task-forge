@@ -69,11 +69,13 @@ Typical triggers:
 
 Each observation should name the type and give a one-line rationale the main agent can act on (e.g. "skill: recurring capacity / cost estimates — same calculation pattern in several episodes, worth a small reusable script or checklist").
 
+### Step 6 — Surface Todo Follow-ups
+If the episode clearly completes, defers, or creates work that should survive beyond this heartbeat, include concise Todo/Scheduled Task recommendations for the main agent. Recommend marking a Todo done only when the objective and evidence actually satisfy it. Do not propose Todo entries for vague aspirations or fixes that should be retried inside the current heartbeat.
+
 ---
 
 ## Return Value
-
-Return a compact, structured judgment for the main agent. This is guidance, not a rigid schema. Clearly cover PASS or FAIL, evidence-backed reasons, required fixes that the executor can act on, and any durable observations worth considering for knowledge or skill promotion. On PASS, fixes should be absent or clearly optional. Observations may be empty on any verdict — do not manufacture observations to fill space.
+Return a compact, structured judgment for the main agent. This is guidance, not a rigid schema. Clearly cover PASS or FAIL, evidence-backed reasons, required fixes that the executor can act on, Todo/Scheduled Task recommendations if any, and any durable observations worth considering for knowledge or skill promotion. On PASS, fixes should be absent or clearly optional. Observations may be empty on any verdict — do not manufacture observations to fill space.
 
 ---
 
@@ -84,3 +86,4 @@ Return a compact, structured judgment for the main agent. This is guidance, not 
 - Stay focused on **this** episode's own objective. You may note broader observations, but do not let them override the per-episode verdict.
 - Keep the final output compact. Do not echo back the execution report.
 - Bash is for read-only verification — tests, scripts, builds, curl, inspection. Throwaway scripts go to `/tmp/` via heredoc. Do not mutate workspace files or install dependencies.
+- Do not mutate Todo files or `scheduled_tasks.json`; only recommend updates for the main agent.
