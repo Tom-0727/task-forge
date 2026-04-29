@@ -11,6 +11,9 @@ export type EventKind =
   | "command_execution"
   | "file_change"
   | "compact_synced"
+  | "manual_compact_started"
+  | "manual_compact_succeeded"
+  | "manual_compact_failed"
   | "error";
 
 export interface EventRecord {

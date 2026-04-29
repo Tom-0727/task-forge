@@ -22,6 +22,8 @@ export function resolvePaths(agentDir: string): AgentPaths {
     passiveModeFile: path.join(runtimeDir, "passive_mode"),
     claudeSessionFile: path.join(runtimeDir, "claude_session_id"),
     codexThreadFile: path.join(runtimeDir, "codex_thread_id"),
+    compactRequestFile: path.join(runtimeDir, "compact_request.json"),
+    compactStatusFile: path.join(runtimeDir, "compact_status.json"),
     metricsFile: path.join(runtimeDir, "metrics.json"),
     eventsFile: path.join(runtimeDir, "events.jsonl"),
     pendingDir: path.join(runtimeDir, "pending_messages"),

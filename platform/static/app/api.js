@@ -78,6 +78,10 @@ export function setPassiveMode(name, enabled) {
   });
 }
 
+export function compactAgent(name) {
+  return jsonRequest(`/api/agents/${encodeURIComponent(name)}/compact`, { method: 'POST' });
+}
+
 export function saveSchedule(name, schedule) {
   return jsonRequest(`/api/agents/${encodeURIComponent(name)}/schedule`, {
     method: 'POST',

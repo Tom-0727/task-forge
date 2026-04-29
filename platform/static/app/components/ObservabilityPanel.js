@@ -1,7 +1,8 @@
 import { html } from '../../vendor/htm.mjs';
-import { useEffect } from '../../vendor/preact-hooks.mjs';
+import { useEffect, useState } from '../../vendor/preact-hooks.mjs';
 import { useStore } from '../useStore.js';
 import { loadMetrics } from '../main.js';
+import * as api from '../api.js';
 
 
 function fmtNum(value) {
@@ -25,7 +26,7 @@ function fmtTs(value) {
   return value || '-';
 }
 
-function MetricCard({ title, rows }) {
+function MetricCard({ title, rows, children = null }) {
   return html`
     <div class="metric-card">
       <h3>${title}</h3>
@@ -35,8 +36,18 @@ function MetricCard({ title, rows }) {
           <strong>${value}</strong>
         </div>
       `)}
+      ${children}
     </div>
   `;
+}
+
+function compactStateText(manual) {
+  if (!manual || !manual.state) return 'idle';
+  if (manual.state === 'succeeded') return 'succeeded';
+  if (manual.state === 'failed') return 'failed';
+  if (manual.state === 'running') return 'running';
+  if (manual.state === 'pending') return 'pending';
+  return manual.state;
 }
 
 function tokenRows(provider, lastTurn, lifetime) {
@@ -57,7 +68,11 @@ function tokenRows(provider, lastTurn, lifetime) {
 export function ObservabilityPanel({ name }) {
   const metrics = useStore((s) => s.metrics);
   const error = useStore((s) => s.metricsError);
-  const provider = useStore((s) => s.detail?.provider);
+  const detail = useStore((s) => s.detail);
+  const provider = detail?.provider;
+  const runnerAlive = Boolean(detail?.status?.runtime_alive);
+  const [compactBusy, setCompactBusy] = useState(false);
+  const [compactResult, setCompactResult] = useState('');
 
   useEffect(() => {
     if (name && !metrics && !error) loadMetrics(name);
@@ -65,9 +80,35 @@ export function ObservabilityPanel({ name }) {
 
   const heartbeat = metrics?.heartbeat || {};
   const compact = metrics?.compact || {};
+  const manualCompact = metrics?.manual_compact || null;
   const tokens = metrics?.tokens || {};
   const lastTurn = tokens.last_turn || {};
   const lifetime = tokens.lifetime || {};
+  const compactActive = manualCompact?.state === 'pending' || manualCompact?.state === 'running';
+  const compactUnsupported = provider !== 'codex' && provider !== 'claude';
+  const compactDisabled = compactBusy || compactActive || compactUnsupported || !runnerAlive;
+  const compactDisabledReason = compactUnsupported
+    ? 'Unsupported provider'
+    : !runnerAlive
+      ? 'Runner offline'
+      : compactActive
+        ? 'In progress'
+        : '';
+
+  async function onCompactNow() {
+    if (compactDisabled) return;
+    setCompactBusy(true);
+    setCompactResult('');
+    try {
+      await api.compactAgent(name);
+      setCompactResult('Requested');
+      await loadMetrics(name);
+    } catch (err) {
+      setCompactResult(`Failed: ${err.message || 'unknown'}`);
+    } finally {
+      setCompactBusy(false);
+    }
+  }
 
   return html`
     <section class="panel">
@@ -90,8 +131,17 @@ export function ObservabilityPanel({ name }) {
             ['Count since last', fmtNum(compact.count_since_last)],
             ['Total compacts', fmtNum(compact.total_compacts)],
             ['Last compact at', fmtTs(compact.last_compact_at)],
+            ['Manual status', compactStateText(manualCompact)],
           ]}
-        />
+        >
+          <div class="metric-actions">
+            <button onClick=${onCompactNow} disabled=${compactDisabled}>
+              ${compactBusy ? 'Requesting...' : 'Compact now'}
+            </button>
+            <span class="meta">${compactResult || compactDisabledReason || fmtTs(manualCompact?.finished_at)}</span>
+          </div>
+          ${manualCompact?.error ? html`<div class="meta metric-note">${manualCompact.error}</div>` : null}
+        <//>
         <${MetricCard}
           title="Tokens"
           rows=${tokenRows(provider, lastTurn, lifetime)}

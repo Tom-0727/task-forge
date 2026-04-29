@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import {
   resolvePaths,
   loadIdentity,
   readMetrics,
+  readManualCompactStatus,
+  utcnow,
   type AgentPaths,
   type AgentIdentity,
 } from "../harness-core/index.js";
@@ -29,6 +32,12 @@ function readText(file: string): string {
   } catch {
     return "";
   }
+}
+
+function writeJsonAtomic(file: string, value: unknown): void {
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", "utf8");
+  fs.renameSync(tmp, file);
 }
 
 function isRunning(pid: number): boolean {
@@ -152,6 +161,9 @@ const HTML = (agentName: string): string => `<!doctype html>
     .metric-title { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; }
     .metric-row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
     .metric-row span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+    .metric-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 6px; }
+    .metric-actions button { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+    .metric-note { overflow-wrap: anywhere; }
     .bar { height: 8px; border-radius: 6px; background: var(--off-bg); overflow: hidden; }
     .bar > div { height: 100%; background: var(--accent); transition: width 0.4s ease; }
     @media (max-width: 760px) { .metric-grid { grid-template-columns: 1fr; } }
@@ -231,6 +243,9 @@ const HTML = (agentName: string): string => `<!doctype html>
           <div class="metric-row"><span>Total</span><span id="compactTotal">—</span></div>
           <div class="metric-row"><span>Avg gap</span><span id="compactAvgGap">—</span></div>
           <div class="metric-row"><span>Last at</span><span id="compactLastAt">—</span></div>
+          <div class="metric-row"><span>Manual</span><span id="compactManual">—</span></div>
+          <div class="metric-actions"><button id="compactNowButton" onclick="compactNow()">Compact now</button><span id="compactResult" class="meta"></span></div>
+          <div id="compactError" class="meta metric-note"></div>
         </div>
         <div class="metric-card">
           <div class="metric-title">Tokens (last turn)</div>
@@ -255,8 +270,9 @@ const HTML = (agentName: string): string => `<!doctype html>
     </section>
   </main>
 <script>
-let autoSyncTimer = null, statusBusy = false, historyBusy = false, metricsBusy = false;
+let autoSyncTimer = null, statusBusy = false, historyBusy = false, metricsBusy = false, compactBusy = false;
 let lastStatusFingerprint = '', lastHistoryFingerprint = '', lastMetricsFingerprint = '';
+let currentProvider = '', runnerOnline = false, compactActive = false;
 function nowText() { return new Date().toLocaleTimeString(); }
 function setSyncMeta(t) { document.getElementById('syncMeta').textContent = t; }
 function shouldStickToBottom(root) { return (root.scrollHeight - root.scrollTop - root.clientHeight) < 80; }
@@ -284,6 +300,16 @@ function renderPills(d) {
     root.appendChild(n);
   }
 }
+function updateCompactButton() {
+  const btn = document.getElementById('compactNowButton');
+  if (!btn) return;
+  const unsupported = currentProvider !== 'codex' && currentProvider !== 'claude';
+  btn.disabled = compactBusy || compactActive || unsupported || !runnerOnline;
+  btn.textContent = compactBusy ? 'Requesting...' : 'Compact now';
+  if (unsupported) document.getElementById('compactResult').textContent = 'Unsupported provider';
+  else if (!runnerOnline) document.getElementById('compactResult').textContent = 'Runner offline';
+  else if (compactActive) document.getElementById('compactResult').textContent = 'In progress';
+}
 function statusFingerprint(d) {
   return [d.agent||'', d.interaction_mode||'', d.provider||'', d.runtime_state||'', d.last_heartbeat||'',
     d.awaiting_human?'1':'0',
@@ -306,9 +332,12 @@ async function loadStatus(force = false) {
     document.getElementById('agentName').textContent = d.agent || '-';
     document.getElementById('interactionMode').textContent = d.interaction_mode || '-';
     document.getElementById('provider').textContent = d.provider || '-';
+    currentProvider = d.provider || '';
+    runnerOnline = Boolean(d.runner && d.runner.state === 'running');
     document.getElementById('runtimeState').textContent = d.runtime_state || '-';
     document.getElementById('heartbeatMeta').textContent = 'Last heartbeat: ' + (d.last_heartbeat || 'none');
     renderPills(d);
+    updateCompactButton();
   } finally { statusBusy = false; }
 }
 function renderMessage(item) {
@@ -359,6 +388,25 @@ async function sendMessage() {
   result.textContent = 'Sent as ' + d.id;
   await refreshAll(true);
 }
+async function compactNow() {
+  if (compactBusy) return;
+  compactBusy = true;
+  document.getElementById('compactResult').textContent = '';
+  document.getElementById('compactError').textContent = '';
+  updateCompactButton();
+  try {
+    const resp = await fetch('/api/compact', { method: 'POST' });
+    const d = await resp.json();
+    if (!resp.ok) throw new Error(d.error || 'compact failed');
+    document.getElementById('compactResult').textContent = 'Requested';
+    await loadMetrics();
+  } catch (err) {
+    document.getElementById('compactResult').textContent = 'Failed: ' + (err && err.message ? err.message : 'unknown');
+  } finally {
+    compactBusy = false;
+    updateCompactButton();
+  }
+}
 function fmtNum(n) { if (typeof n !== 'number' || !isFinite(n)) return '—'; return n.toLocaleString(); }
 function fmtSec(s) { if (typeof s !== 'number' || !isFinite(s)) return '—'; if (s < 60) return s.toFixed(1) + 's'; const m = Math.floor(s / 60), r = s - m * 60; return m + 'm ' + r.toFixed(0) + 's'; }
 function fmtTs(s) { if (!s) return 'never'; const d = new Date(s); if (isNaN(d.getTime())) return s; const p = (n) => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()); }
@@ -368,7 +416,7 @@ async function loadMetrics() {
   try {
     const resp = await fetch('/api/metrics');
     const m = await resp.json();
-    const fp = JSON.stringify([m.heartbeat, m.compact, m.tokens && m.tokens.estimated_context_tokens, m.tokens && m.tokens.last_turn, m.last_updated]);
+    const fp = JSON.stringify([m.heartbeat, m.compact, m.manual_compact, m.tokens && m.tokens.estimated_context_tokens, m.tokens && m.tokens.last_turn, m.last_updated]);
     if (fp === lastMetricsFingerprint) return;
     lastMetricsFingerprint = fp;
     const hb = m.heartbeat || {}, c = m.compact || {}, t = (m.tokens && m.tokens.last_turn) || {};
@@ -384,6 +432,14 @@ async function loadMetrics() {
     document.getElementById('compactTotal').textContent = fmtNum(c.total_compacts);
     document.getElementById('compactAvgGap').textContent = c.total_compacts ? (c.avg_heartbeats_between || 0).toFixed(2) + ' hb' : '—';
     document.getElementById('compactLastAt').textContent = fmtTs(c.last_compact_at);
+    const manual = m.manual_compact || {};
+    compactActive = manual.state === 'pending' || manual.state === 'running';
+    document.getElementById('compactManual').textContent = manual.state || 'idle';
+    document.getElementById('compactError').textContent = manual.error || '';
+    if (!compactActive && !manual.error && !document.getElementById('compactResult').textContent) {
+      document.getElementById('compactResult').textContent = manual.finished_at ? fmtTs(manual.finished_at) : '';
+    }
+    updateCompactButton();
     document.getElementById('tokCtx').textContent = fmtNum((m.tokens && m.tokens.estimated_context_tokens) || 0);
     document.getElementById('tokIn').textContent = fmtNum(t.input_tokens);
     document.getElementById('tokOut').textContent = fmtNum(t.output_tokens);
@@ -425,7 +481,10 @@ async function main(): Promise<void> {
     reply.type("text/html; charset=utf-8").send(HTML(identity.agent_name));
   });
   app.get("/api/status", async () => buildStatus(paths, identity));
-  app.get("/api/metrics", async () => readMetrics(paths));
+  app.get("/api/metrics", async () => ({
+    ...readMetrics(paths),
+    manual_compact: readManualCompactStatus(paths),
+  }));
   app.get<{ Querystring: { limit?: string } }>("/api/history", async (req) => {
     let limit = parseInt(req.query.limit ?? "50", 10);
     if (!Number.isFinite(limit)) limit = 50;
@@ -441,6 +500,41 @@ async function main(): Promise<void> {
     });
     writePendingMessage(paths.runtimeDir, "human", entry.id, "web-ui");
     return { ok: true, id: entry.id, ts: entry.ts };
+  });
+  app.post("/api/compact", async (_req, reply) => {
+    if (identity.provider !== "codex" && identity.provider !== "claude") {
+      return reply.code(400).send({ error: "manual compact is only supported for codex or claude agents" });
+    }
+    const runtimeStatus = pidStatus(path.join(paths.pidsDir, "runtime"));
+    if (runtimeStatus.state !== "running") {
+      return reply.code(409).send({ error: "agent runtime is not running" });
+    }
+    if (fs.existsSync(paths.compactRequestFile)) {
+      let existing: unknown = {};
+      try {
+        existing = JSON.parse(fs.readFileSync(paths.compactRequestFile, "utf8"));
+      } catch {
+        existing = {};
+      }
+      return { ok: true, already_pending: true, request: existing };
+    }
+    const now = utcnow();
+    const request = {
+      id: `compact-${randomUUID().replaceAll("-", "")}`,
+      provider: identity.provider,
+      requested_at: now,
+      requested_by: "web-ui",
+    };
+    const status = {
+      state: "pending",
+      request_id: request.id,
+      provider: identity.provider,
+      requested_at: now,
+    };
+    fs.mkdirSync(paths.runtimeDir, { recursive: true });
+    writeJsonAtomic(paths.compactStatusFile, status);
+    writeJsonAtomic(paths.compactRequestFile, request);
+    return { ok: true, request, status };
   });
 
   const address = await app.listen({ host, port });

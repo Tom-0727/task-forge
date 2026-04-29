@@ -42,6 +42,11 @@ export interface TurnCompletedEvent {
   tokenUsage?: ThreadTokenUsage;
 }
 
+export interface CompactCompletedEvent {
+  threadId: string;
+  turnId?: string;
+}
+
 export interface TurnFailedEvent {
   threadId: string;
   turnId: string;
@@ -283,9 +288,8 @@ export class CodexAppServerClient {
     return res.thread.id;
   }
 
-  async resumeThread(threadId: string, opts: Omit<ThreadStartOptions, "cwd"> & { cwd?: string }): Promise<void> {
-    const params: Record<string, unknown> = { threadId };
-    if (opts.cwd) params.cwd = opts.cwd;
+  async resumeThread(threadId: string, opts: ThreadStartOptions): Promise<void> {
+    const params: Record<string, unknown> = { threadId, cwd: opts.cwd };
     if (opts.sandbox) params.sandbox = opts.sandbox;
     if (opts.approvalPolicy) params.approvalPolicy = opts.approvalPolicy;
     if (opts.skipGitRepoCheck !== undefined) params.skipGitRepoCheck = opts.skipGitRepoCheck;
@@ -370,6 +374,81 @@ export class CodexAppServerClient {
         threadId: opts.threadId,
         input: [{ type: "text", text: opts.text }],
       }).catch((err) => {
+        settleReject(err);
+      });
+    });
+  }
+
+  async compactThread(threadId: string): Promise<CompactCompletedEvent> {
+    return new Promise<CompactCompletedEvent>((resolve, reject) => {
+      const disposers: Array<() => void> = [];
+      let settled = false;
+      let compactTurnId: string | undefined;
+      const cleanup = (): void => {
+        for (const d of disposers) d();
+        clearTimeout(timer);
+      };
+      const settleResolve = (v: CompactCompletedEvent): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(v);
+      };
+      const settleReject = (err: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      };
+      const timer = setTimeout(() => {
+        settleReject(new Error(`compact timed out after ${this.turnTimeoutMs}ms`));
+      }, this.turnTimeoutMs);
+
+      disposers.push(this.onExit((err) => settleReject(err)));
+
+      disposers.push(
+        this.onNotification("turn/started", (params) => {
+          const p = params as { threadId?: string; turn?: { id?: string } };
+          if (p.threadId !== threadId) return;
+          compactTurnId = p.turn?.id;
+        })
+      );
+      disposers.push(
+        this.onNotification("thread/compacted", (params) => {
+          const p = params as { threadId?: string; turnId?: string };
+          if (p.threadId !== threadId) return;
+          settleResolve({ threadId, turnId: p.turnId ?? compactTurnId });
+        })
+      );
+      disposers.push(
+        this.onNotification("item/completed", (params) => {
+          const p = params as ItemCompletedNotification;
+          if (p.threadId !== threadId) return;
+          if ((p.item as { type?: string }).type !== "contextCompaction") return;
+          settleResolve({ threadId, turnId: p.turnId ?? compactTurnId });
+        })
+      );
+      disposers.push(
+        this.onNotification("turn/completed", (params) => {
+          const p = params as { threadId?: string; turn?: { id?: string; status?: string } };
+          if (p.threadId !== threadId) return;
+          if (compactTurnId && p.turn?.id && p.turn.id !== compactTurnId) return;
+          if (p.turn?.status === "failed") {
+            settleReject(new Error("compact turn failed"));
+            return;
+          }
+          settleResolve({ threadId, turnId: p.turn?.id ?? compactTurnId });
+        })
+      );
+      disposers.push(
+        this.onNotification("turn/failed", (params) => {
+          const p = params as TurnFailedEvent;
+          if (p.threadId !== threadId) return;
+          settleReject(new Error(`compact failed: ${p.error?.message ?? "unknown"}`));
+        })
+      );
+
+      this.request("thread/compact/start", { threadId }).catch((err) => {
         settleReject(err);
       });
     });

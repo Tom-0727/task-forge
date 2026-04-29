@@ -18,11 +18,18 @@ import {
   buildPrompt,
   runPreHeartbeat,
   runPostHeartbeat,
+  readCompactRequest,
+  hasCompactRequest,
+  clearCompactRequest,
+  writeManualCompactStatus,
+  syncCompactState,
+  utcnow,
   type AgentPaths,
   type CompactObservation,
   type TurnTokens,
 } from "../harness-core/index.js";
 import { CodexAppServerClient } from "./app-server-client.js";
+import type { ThreadStartOptions } from "./app-server-client.js";
 
 function scanCodexCompactLog(threadId: string): CompactObservation {
   const sessionsDir = path.join(os.homedir(), ".codex", "sessions");
@@ -89,6 +96,15 @@ function saveThreadId(paths: AgentPaths, tid: string): void {
 
 let shuttingDown = false;
 
+function threadOptions(paths: AgentPaths): ThreadStartOptions {
+  return {
+    cwd: paths.agentDir,
+    sandbox: "danger-full-access",
+    approvalPolicy: "never",
+    skipGitRepoCheck: true,
+  };
+}
+
 async function ensureThread(
   client: CodexAppServerClient,
   paths: AgentPaths,
@@ -96,23 +112,123 @@ async function ensureThread(
 ): Promise<string> {
   const existing = loadThreadId(paths);
   if (existing) {
-    await client.resumeThread(existing, {
-      sandbox: "danger-full-access",
-      approvalPolicy: "never",
-      skipGitRepoCheck: true,
-    });
+    await client.resumeThread(existing, threadOptions(paths));
     log.info(`resumed thread ${existing}`);
     return existing;
   }
-  const tid = await client.startThread({
-    cwd: paths.agentDir,
-    sandbox: "danger-full-access",
-    approvalPolicy: "never",
-    skipGitRepoCheck: true,
-  });
+  const tid = await client.startThread(threadOptions(paths));
   saveThreadId(paths, tid);
   log.info(`started thread ${tid}`);
   return tid;
+}
+
+async function resumeExistingThread(
+  client: CodexAppServerClient,
+  paths: AgentPaths,
+  threadId: string,
+  log: ReturnType<typeof createLogger>
+): Promise<void> {
+  await client.resumeThread(threadId, threadOptions(paths));
+  log.info(`resumed thread ${threadId}`);
+}
+
+async function processCompactRequest(
+  paths: AgentPaths,
+  client: CodexAppServerClient,
+  log: ReturnType<typeof createLogger>
+): Promise<boolean> {
+  const req = readCompactRequest(paths);
+  if (!req) {
+    if (hasCompactRequest(paths)) {
+      clearCompactRequest(paths);
+      log.warn("dropped invalid compact request file");
+      return true;
+    }
+    return false;
+  }
+
+  const requestId = req.id;
+  const startedAt = utcnow();
+  let threadId: string | null = null;
+  writeManualCompactStatus(paths, {
+    state: "running",
+    request_id: requestId,
+    provider: "codex",
+    requested_at: req.requested_at,
+    started_at: startedAt,
+  });
+  appendEvent(paths, "manual_compact_started", {
+    request_id: requestId,
+    requested_at: req.requested_at,
+  });
+
+  try {
+    if (req.provider !== "codex") {
+      throw new Error(`unsupported compact provider: ${req.provider}`);
+    }
+
+    threadId = loadThreadId(paths);
+    if (!threadId) {
+      throw new Error("no codex thread to compact");
+    }
+
+    if (!client.isAlive()) {
+      log.warn("app-server not alive; restarting before compact");
+      await client.start();
+    }
+
+    await resumeExistingThread(client, paths, threadId, log);
+    const before = scanCodexCompactLog(threadId);
+    log.info(`manual compact starting for thread ${threadId}`);
+    const completed = await client.compactThread(threadId);
+    let obs = scanCodexCompactLog(threadId);
+    for (let i = 0; i < 5 && obs.total <= before.total; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      obs = scanCodexCompactLog(threadId);
+    }
+    const synced = syncCompactState(paths, obs);
+    writeManualCompactStatus(paths, {
+      state: "succeeded",
+      request_id: requestId,
+      provider: "codex",
+      requested_at: req.requested_at,
+      started_at: startedAt,
+      finished_at: utcnow(),
+      thread_id: threadId,
+      total_compacts: synced.compact.total_compacts,
+      last_compact_at: synced.compact.last_compact_at,
+    });
+    appendEvent(paths, "manual_compact_succeeded", {
+      request_id: requestId,
+      thread_id: threadId,
+      turn_id: completed.turnId,
+      total_compacts: synced.compact.total_compacts,
+      last_compact_at: synced.compact.last_compact_at,
+    });
+    log.info(`manual compact finished for thread ${threadId}`);
+  } catch (err) {
+    const message = (err as Error).message;
+    writeManualCompactStatus(paths, {
+      state: "failed",
+      request_id: requestId,
+      provider: "codex",
+      requested_at: req.requested_at,
+      started_at: startedAt,
+      finished_at: utcnow(),
+      error: message,
+      thread_id: threadId ?? undefined,
+    });
+    appendEvent(paths, "manual_compact_failed", {
+      request_id: requestId,
+      thread_id: threadId,
+      message,
+    });
+    log.error(`manual compact failed: ${message}`);
+  } finally {
+    clearCompactRequest(paths, requestId);
+  }
+
+  return true;
 }
 
 async function invokeAgent(
@@ -206,6 +322,17 @@ async function main(): Promise<void> {
 
   try {
     while (!shuttingDown) {
+      if (await processCompactRequest(paths, client, log)) {
+        if (hasAnyPending(paths)) {
+          log.info("pending messages after compact; continuing immediately");
+          continue;
+        }
+        const interval = readInterval(paths, identity.runtime.default_interval_minutes);
+        log.info(`sleeping ${interval}m`);
+        await sleepWithWakeup(paths, interval * 60, () => shuttingDown);
+        continue;
+      }
+
       const decision = decidePreInvoke(paths, identity, firstHeartbeat);
       writeHeartbeat(paths);
       writeState(paths, decision.stateUpdate);

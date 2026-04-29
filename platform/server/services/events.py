@@ -71,8 +71,23 @@ def scan_watch_targets() -> dict[str, dict]:
         if not workdir.exists():
             continue
         runtime_dir = workdir / "Runtime"
-        entry: dict = {"state": 0.0, "heartbeat": 0.0, "pid": 0.0, "mailboxes": {}}
-        for key, rel in (("state", "state"), ("heartbeat", "last_heartbeat"), ("pid", "pid")):
+        entry: dict = {
+            "state": 0.0,
+            "heartbeat": 0.0,
+            "pid": 0.0,
+            "runtime_pid": 0.0,
+            "metrics": 0.0,
+            "compact": 0.0,
+            "mailboxes": {},
+        }
+        for key, rel in (
+            ("state", "state"),
+            ("heartbeat", "last_heartbeat"),
+            ("pid", "pid"),
+            ("runtime_pid", "pids/runtime"),
+            ("metrics", "metrics.json"),
+            ("compact", "compact_status.json"),
+        ):
             p = runtime_dir / rel
             try:
                 entry[key] = p.stat().st_mtime if p.exists() else 0.0
@@ -105,6 +120,9 @@ def diff_targets(prev: dict, curr: dict) -> tuple[set[str], bool]:
             old.get("state") != snap.get("state")
             or old.get("heartbeat") != snap.get("heartbeat")
             or old.get("pid") != snap.get("pid")
+            or old.get("runtime_pid") != snap.get("runtime_pid")
+            or old.get("metrics") != snap.get("metrics")
+            or old.get("compact") != snap.get("compact")
             or old.get("mailboxes") != snap.get("mailboxes")
         ):
             changed.add(name)

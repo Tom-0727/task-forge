@@ -162,6 +162,15 @@ def read_agent_status(workdir: str) -> dict:
         except (OSError, ValueError):
             pass
 
+    runtime_pid = _read(runtime_dir / "pids" / "runtime")
+    runtime_alive = False
+    if runtime_pid:
+        try:
+            os.kill(int(runtime_pid), 0)
+            runtime_alive = True
+        except (OSError, ValueError):
+            pass
+
     # State
     state = _read(runtime_dir / "state") or "unknown"
     if state == "running" and not runner_alive:
@@ -196,9 +205,10 @@ def read_agent_status(workdir: str) -> dict:
         "state": state,
         "runner_pid": int(runner_pid) if runner_pid.isdigit() else None,
         "runner_alive": runner_alive,
+        "runtime_pid": int(runtime_pid) if runtime_pid.isdigit() else None,
+        "runtime_alive": runtime_alive,
         "last_heartbeat": _format_ts(_read(runtime_dir / "last_heartbeat")),
         "awaiting_human": has_awaiting,
         "last_message": last_message,
     }
-
 

@@ -50,6 +50,8 @@ export interface AgentPaths {
   passiveModeFile: string;
   claudeSessionFile: string;
   codexThreadFile: string;
+  compactRequestFile: string;
+  compactStatusFile: string;
   metricsFile: string;
   eventsFile: string;
   pendingDir: string;

@@ -19,6 +19,12 @@ import {
   buildPrompt,
   runPreHeartbeat,
   runPostHeartbeat,
+  readCompactRequest,
+  hasCompactRequest,
+  clearCompactRequest,
+  writeManualCompactStatus,
+  syncCompactState,
+  utcnow,
   type AgentIdentity,
   type AgentPaths,
   type CompactObservation,
@@ -85,6 +91,18 @@ function resolveClaudeExecutable(): string | undefined {
   return undefined;
 }
 
+function pushStderr(lines: string[], data: string): void {
+  for (const line of data.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed) lines.push(trimmed);
+  }
+  if (lines.length > 20) lines.splice(0, lines.length - 20);
+}
+
+function stderrSummary(lines: string[]): string {
+  return lines.length ? ` stderr: ${lines.slice(-6).join(" | ")}` : "";
+}
+
 function parseAgentFile(filePath: string): AgentDefinition {
   const raw = fs.readFileSync(filePath, "utf8");
   if (!raw.startsWith("---\n")) {
@@ -148,6 +166,159 @@ function loadProjectAgents(agentDir: string): Record<string, AgentDefinition> {
 }
 
 let shuttingDown = false;
+
+async function compactClaudeSession(
+  paths: AgentPaths,
+  sessionId: string,
+  log: ReturnType<typeof createLogger>
+): Promise<{ sessionId: string }> {
+  const claudeBin = resolveClaudeExecutable();
+  const stderrLines: string[] = [];
+  const options: ClaudeAgentOptions = {
+    cwd: paths.agentDir,
+    resume: sessionId,
+    tools: [],
+    allowedTools: [],
+    maxTurns: 1,
+    permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
+    stderr: (data) => pushStderr(stderrLines, data),
+    ...(claudeBin ? { pathToClaudeCodeExecutable: claudeBin } : {}),
+  };
+
+  let boundarySeen = false;
+  let resultSubtype: string | null = null;
+  let newSessionId = sessionId;
+
+  try {
+    for await (const message of query({ prompt: "/compact", options })) {
+      const kind = (message as { type?: string }).type;
+      if (kind === "system") {
+        const sys = message as {
+          subtype?: string;
+          session_id?: string;
+          compact_result?: string;
+          compact_error?: string;
+        };
+        if (sys.session_id) newSessionId = sys.session_id;
+        if (sys.subtype === "compact_boundary") {
+          boundarySeen = true;
+        } else if (sys.subtype === "status" && sys.compact_result === "failed") {
+          throw new Error(`claude compact failed: ${sys.compact_error ?? "unknown"}`);
+        }
+      } else if (kind === "result") {
+        const result = message as { subtype?: string; session_id?: string };
+        resultSubtype = result.subtype ?? null;
+        if (result.session_id) newSessionId = result.session_id;
+      }
+    }
+  } catch (err) {
+    throw new Error(`${(err as Error).message}${stderrSummary(stderrLines)}`);
+  }
+
+  if (!boundarySeen || resultSubtype !== "success") {
+    throw new Error(
+      `claude compact failed: boundary=${boundarySeen}, result=${resultSubtype ?? "none"}${stderrSummary(stderrLines)}`
+    );
+  }
+
+  saveSessionId(paths, newSessionId);
+  log.info(`manual compact session_id=${newSessionId}`);
+  return { sessionId: newSessionId };
+}
+
+async function processCompactRequest(
+  paths: AgentPaths,
+  log: ReturnType<typeof createLogger>
+): Promise<boolean> {
+  const req = readCompactRequest(paths);
+  if (!req) {
+    if (hasCompactRequest(paths)) {
+      clearCompactRequest(paths);
+      log.warn("dropped invalid compact request file");
+      return true;
+    }
+    return false;
+  }
+
+  const requestId = req.id;
+  const startedAt = utcnow();
+  let sessionId: string | null = null;
+  writeManualCompactStatus(paths, {
+    state: "running",
+    request_id: requestId,
+    provider: "claude",
+    requested_at: req.requested_at,
+    started_at: startedAt,
+  });
+  appendEvent(paths, "manual_compact_started", {
+    request_id: requestId,
+    requested_at: req.requested_at,
+  });
+
+  try {
+    if (req.provider !== "claude") {
+      throw new Error(`unsupported compact provider: ${req.provider}`);
+    }
+
+    sessionId = loadSessionId(paths);
+    if (!sessionId) {
+      throw new Error("no claude session to compact");
+    }
+
+    const before = scanClaudeCompactLog(sessionId);
+    log.info(`manual compact starting for session ${sessionId}`);
+    const completed = await compactClaudeSession(paths, sessionId, log);
+    sessionId = completed.sessionId;
+
+    let obs = scanClaudeCompactLog(sessionId);
+    for (let i = 0; i < 5 && obs.total <= before.total; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      obs = scanClaudeCompactLog(sessionId);
+    }
+    const synced = syncCompactState(paths, obs);
+    writeManualCompactStatus(paths, {
+      state: "succeeded",
+      request_id: requestId,
+      provider: "claude",
+      requested_at: req.requested_at,
+      started_at: startedAt,
+      finished_at: utcnow(),
+      session_id: sessionId,
+      total_compacts: synced.compact.total_compacts,
+      last_compact_at: synced.compact.last_compact_at,
+    });
+    appendEvent(paths, "manual_compact_succeeded", {
+      request_id: requestId,
+      session_id: sessionId,
+      total_compacts: synced.compact.total_compacts,
+      last_compact_at: synced.compact.last_compact_at,
+    });
+    log.info(`manual compact finished for session ${sessionId}`);
+  } catch (err) {
+    const message = (err as Error).message;
+    writeManualCompactStatus(paths, {
+      state: "failed",
+      request_id: requestId,
+      provider: "claude",
+      requested_at: req.requested_at,
+      started_at: startedAt,
+      finished_at: utcnow(),
+      error: message,
+      session_id: sessionId ?? undefined,
+    });
+    appendEvent(paths, "manual_compact_failed", {
+      request_id: requestId,
+      session_id: sessionId,
+      message,
+    });
+    log.error(`manual compact failed: ${message}`);
+  } finally {
+    clearCompactRequest(paths, requestId);
+  }
+
+  return true;
+}
 
 async function invokeAgent(
   paths: AgentPaths,
@@ -264,6 +435,17 @@ async function main(): Promise<void> {
 
   try {
     while (!shuttingDown) {
+      if (await processCompactRequest(paths, log)) {
+        if (hasAnyPending(paths)) {
+          log.info("pending messages after compact; continuing immediately");
+          continue;
+        }
+        const interval = readInterval(paths, identity.runtime.default_interval_minutes);
+        log.info(`sleeping ${interval}m`);
+        await sleepWithWakeup(paths, interval * 60, () => shuttingDown);
+        continue;
+      }
+
       const decision = decidePreInvoke(paths, identity, firstHeartbeat);
       writeHeartbeat(paths);
       writeState(paths, decision.stateUpdate);

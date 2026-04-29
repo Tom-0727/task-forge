@@ -31,13 +31,26 @@ def default_metrics() -> dict:
                 "cached_input_tokens": 0,
             },
         },
+        "manual_compact": None,
         "last_updated": None,
     }
+
+
+def read_manual_compact_status(workdir: Path) -> dict | None:
+    status_path = workdir / "Runtime" / "compact_status.json"
+    if not status_path.exists():
+        return None
+    try:
+        raw = json.loads(status_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return raw if isinstance(raw, dict) else None
 
 
 def read_agent_metrics(workdir: Path) -> dict:
     metrics_path = workdir / "Runtime" / "metrics.json"
     base = default_metrics()
+    base["manual_compact"] = read_manual_compact_status(workdir)
     if not metrics_path.exists():
         return base
     try:
@@ -62,5 +75,6 @@ def read_agent_metrics(workdir: Path) -> dict:
             "estimated_context_tokens": tokens.get("estimated_context_tokens", 0),
             "lifetime": {**base["tokens"]["lifetime"], **lifetime},
         },
+        "manual_compact": read_manual_compact_status(workdir),
         "last_updated": raw.get("last_updated"),
     }

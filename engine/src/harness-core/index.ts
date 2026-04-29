@@ -14,3 +14,4 @@ export * from "./sleep.js";
 export * from "./time.js";
 export * from "./metrics.js";
 export * from "./events.js";
+export * from "./compact.js";
